@@ -11,3 +11,7 @@ The presentation helper in apps/api/test/fixtures is a frontend protocol snapsho
 Checks: npm run typecheck, npm run lint, npm test, npm run build.
 
 Application: apps/api. Shared game contracts and logic: packages/minigames. Environment secrets, dependencies, build output, and local uploads are excluded from Git.
+
+## Docker
+
+See [DOCKER.md](DOCKER.md) for image build, run, migrations, and media storage commands.
