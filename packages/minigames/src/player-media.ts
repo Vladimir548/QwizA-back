@@ -14,6 +14,15 @@ export interface PlayerMediaPeer extends PlayerMediaState {
   connectionId: string;
 }
 
+export interface PlayerMediaConnection {
+  url: string;
+  token: string;
+}
+
+export function playerMediaIdentity(participantId: string, connectionId: string) {
+  return `${participantId}~${connectionId}`;
+}
+
 export const emptyPlayerMedia: PlayerMediaState = {
   camera: false,
   microphone: false,

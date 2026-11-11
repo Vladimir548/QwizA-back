@@ -9,13 +9,17 @@ import { emptyPlayerMedia } from "@qwiza/minigames";
 import { PlayerMediaGateway } from "../src/rooms/player-media.gateway";
 import type { RoomsService } from "../src/rooms/rooms.service";
 import type { SessionService } from "../src/auth/session.service";
+import { TokenVerifier } from "livekit-server-sdk";
+import { testLivekit, livekitTestKey, livekitTestSecret } from "./helpers/livekit";
 
-test("media role gates capture and SDP sending, keeps guest receiving and external links, and revokes open streams", async () => {
+test("media role gates LiveKit publishing, keeps guest receiving and external links, and revokes open streams", async () => {
   const http = createServer();
   const server = new Server(http);
   const namespace = server.of("/player-media");
   const roles: Record<string, string> = { m: "media", a: "admin", u: "user" };
   const tokens = { m: "m".repeat(44), a: "a".repeat(44), u: "u".repeat(44) };
+  const livekit = testLivekit();
+  const verifier = new TokenVerifier(livekitTestKey, livekitTestSecret);
   const gateway = new PlayerMediaGateway(
     {
       authenticate: async (_room: string, token: string) => ({
@@ -29,13 +33,14 @@ test("media role gates capture and SDP sending, keeps guest receiving and extern
         return id ? { id, role: roles[id] } : null;
       },
     } as unknown as SessionService,
+    livekit.service,
   );
   Object.defineProperty(gateway, "server", { value: namespace });
   gateway.afterInit(namespace);
   namespace.on("connection", (socket) => {
     void gateway.handleConnection(socket);
     socket.on("media:state", async (value, ack) => ack(await gateway.update(socket, value)));
-    socket.on("media:signal", async (value, ack) => ack(await gateway.signal(socket, value)));
+    socket.on("media:token", async (ack) => ack(await gateway.connection(socket)));
     socket.on("disconnect", () => gateway.handleDisconnect(socket));
   });
   http.listen(0, "127.0.0.1");
@@ -83,32 +88,11 @@ test("media role gates capture and SDP sending, keeps guest receiving and extern
         ).ok,
         true,
       );
-      assert.equal(
-        (
-          await source.socket.emitWithAck("media:signal", {
-            to: "m",
-            signal: {
-              type: "offer",
-              sdp: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=sendrecv\r\n",
-            },
-          })
-        ).ok,
-        false,
-      );
-      assert.equal(
-        (
-          await source.socket.emitWithAck("media:signal", {
-            to: "m",
-            signal: {
-              type: "offer",
-              sdp: "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=recvonly\r\n",
-            },
-          })
-        ).ok,
-        true,
-      );
+      const grant = await verifier.verify((await source.socket.emitWithAck("media:token")).token);
+      assert.equal(grant.video?.canPublish, false);
+      assert.equal(grant.video?.canSubscribe, true);
     }
-    for (const source of [media, admin])
+    for (const source of [media, admin]) {
       assert.equal(
         (
           await source.socket.emitWithAck("media:state", {
@@ -119,6 +103,9 @@ test("media role gates capture and SDP sending, keeps guest receiving and extern
         ).ok,
         true,
       );
+      const grant = await verifier.verify((await source.socket.emitWithAck("media:token")).token);
+      assert.equal(grant.video?.canPublish, true);
+    }
     roles.m = "user";
     assert.equal(
       (await media.socket.emitWithAck("media:state", { ...emptyPlayerMedia, camera: true })).ok,
@@ -126,12 +113,17 @@ test("media role gates capture and SDP sending, keeps guest receiving and extern
     );
     const changed = once(media.socket, "media:role-changed"),
       disconnected = once(media.socket, "disconnect");
-    gateway.accountRoleChanged("m");
+    await gateway.accountRoleChanged("m");
     await changed;
     await disconnected;
     assert.equal(media.socket.connected, false);
+    assert.ok(livekit.disconnected.some((identity) => identity.startsWith("room/m~")));
     const stolen = await connect("m", tokens.a);
     assert.equal(stolen.access, false);
+    const stolenGrant = await verifier.verify(
+      (await stolen.socket.emitWithAck("media:token")).token,
+    );
+    assert.equal(stolenGrant.video?.canPublish, false);
     assert.equal(
       (await stolen.socket.emitWithAck("media:state", { ...emptyPlayerMedia, camera: true })).ok,
       false,

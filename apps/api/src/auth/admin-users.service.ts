@@ -87,7 +87,7 @@ export class AdminUsersService {
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
-      if (roleChanged) this.media.accountRoleChanged(id);
+      if (roleChanged) await this.media.accountRoleChanged(id);
       return result;
     } catch (cause) {
       if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2034")

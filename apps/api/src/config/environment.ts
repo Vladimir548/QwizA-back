@@ -30,6 +30,23 @@ export function validateEnvironment(env: Record<string, unknown>) {
   ) {
     throw new Error("DATABASE_URL must be a PostgreSQL connection URL");
   }
+  const livekitUrl = String(env.LIVEKIT_URL ?? "");
+  if (livekitUrl) {
+    const livekit = new URL(livekitUrl);
+    if (
+      !["ws:", "wss:"].includes(livekit.protocol) ||
+      !env.LIVEKIT_API_KEY ||
+      !env.LIVEKIT_API_SECRET
+    )
+      throw new Error(
+        "LIVEKIT_URL requires a WebSocket URL, LIVEKIT_API_KEY and LIVEKIT_API_SECRET",
+      );
+  }
+  if (
+    env.LIVEKIT_API_URL &&
+    !["http:", "https:"].includes(new URL(String(env.LIVEKIT_API_URL)).protocol)
+  )
+    throw new Error("LIVEKIT_API_URL must be an HTTP URL");
   return {
     ...env,
     PORT: port,
@@ -39,5 +56,6 @@ export function validateEnvironment(env: Record<string, unknown>) {
     MEDIA_VIDEO_MAX_BYTES: videoMaxBytes,
     MEDIA_AUDIO_MAX_BYTES: audioMaxBytes,
     DATABASE_URL: databaseUrl,
+    LIVEKIT_URL: livekitUrl,
   };
 }

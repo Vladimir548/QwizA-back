@@ -7,11 +7,18 @@ import { PlayerMediaGateway } from "./player-media.gateway";
 import { RoomsService } from "./rooms.service";
 import { MinigamesModule } from "../minigames/minigames.module";
 import { TopicMinigamesService } from "./topic-minigames.service";
+import { LivekitService } from "./livekit.service";
 
 @Module({
   imports: [WorkshopModule, MinigamesModule, SessionModule],
   controllers: [RoomsController],
-  providers: [RoomsService, RoomsGateway, PlayerMediaGateway, TopicMinigamesService],
+  providers: [
+    RoomsService,
+    RoomsGateway,
+    PlayerMediaGateway,
+    TopicMinigamesService,
+    LivekitService,
+  ],
   exports: [RoomsService, PlayerMediaGateway],
 })
 export class RoomsModule {}

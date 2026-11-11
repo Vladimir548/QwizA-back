@@ -6,30 +6,17 @@ import { once } from "node:events";
 import { Server } from "socket.io";
 import { io, type Socket } from "socket.io-client";
 import { emptyPlayerMedia, type PlayerMediaPeer } from "@qwiza/minigames";
-import { isMediaSignal, PlayerMediaGateway } from "../src/rooms/player-media.gateway";
+import { PlayerMediaGateway } from "../src/rooms/player-media.gateway";
+import { TokenVerifier } from "livekit-server-sdk";
+import { testLivekit, livekitTestKey, livekitTestSecret } from "./helpers/livekit";
 import type { RoomsService } from "../src/rooms/rooms.service";
 import type { SessionService } from "../src/auth/session.service";
-
-test("media rejects malformed and oversized signalling", () => {
-  for (const signal of [
-    null,
-    {},
-    { type: "rollback", sdp: "" },
-    { type: "offer", sdp: 3 },
-    { candidate: "ice", sdpMLineIndex: -1 },
-    { candidate: "x".repeat(32769) },
-  ])
-    assert.equal(isMediaSignal({ to: "p2", signal }), false);
-  assert.ok(isMediaSignal({ to: "p2", signal: { type: "offer", sdp: "v=0" } }));
-  assert.ok(
-    isMediaSignal({ to: "p2", signal: { candidate: "ice", sdpMid: "0", sdpMLineIndex: 0 } }),
-  );
-});
 
 test("authenticated media stays within its room, ignores forged owners and cleans up on disconnect", async () => {
   const http = createServer();
   const server = new Server(http);
   const namespace = server.of("/player-media");
+  const livekit = testLivekit();
   const gateway = new PlayerMediaGateway(
     {
       authenticate: async (roomId: string, token: string) => {
@@ -38,13 +25,14 @@ test("authenticated media stays within its room, ignores forged owners and clean
       },
     } as RoomsService,
     { user: async () => null } as unknown as SessionService,
+    livekit.service,
   );
   Object.defineProperty(gateway, "server", { value: namespace });
   gateway.afterInit(namespace);
   namespace.on("connection", (socket) => {
     void gateway.handleConnection(socket);
     socket.on("media:state", async (value, ack) => ack(await gateway.update(socket, value)));
-    socket.on("media:signal", async (value, ack) => ack(await gateway.signal(socket, value)));
+    socket.on("media:token", async (ack) => ack(await gateway.connection(socket)));
     socket.on("disconnect", () => gateway.handleDisconnect(socket));
   });
   http.listen(0, "127.0.0.1");
@@ -92,29 +80,15 @@ test("authenticated media stays within its room, ignores forged owners and clean
       ).ok,
       false,
     );
-    assert.equal(
-      (await a.emitWithAck("media:signal", { to: "c", signal: { type: "offer", sdp: "v=0" } })).ok,
-      false,
-    );
-    assert.equal(
-      (await outsider.emitWithAck("media:signal", { to: "a", signal: { candidate: "ice" } })).ok,
-      false,
-    );
-    const signalPromise = once(b, "media:signal");
-    assert.equal(
-      (
-        await a.emitWithAck("media:signal", {
-          to: "b",
-          from: "c",
-          signal: {
-            type: "offer",
-            sdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=recvonly\r\n",
-          },
-        })
-      ).ok,
-      true,
-    );
-    assert.equal((await signalPromise)[0].from, "a");
+    const verifier = new TokenVerifier(livekitTestKey, livekitTestSecret);
+    const connection = await a.emitWithAck("media:token");
+    assert.equal(connection.ok, true);
+    const grant = await verifier.verify(connection.token);
+    assert.equal(grant.sub, `a~${a.id}`);
+    assert.equal(grant.video?.room, "qwiza-one");
+    assert.equal(grant.video?.canPublish, false);
+    const outside = await verifier.verify((await outsider.emitWithAck("media:token")).token);
+    assert.equal(outside.video?.room, "qwiza-two");
     const disconnected = once(b, "media:peers");
     a.disconnect();
     assert.deepEqual(

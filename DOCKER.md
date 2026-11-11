@@ -21,3 +21,5 @@ docker run --rm --env-file apps/api/.env qwiza-back-migrations npm run db:deploy
 ```
 
 Images use multiple build stages and run the application as the unprivileged `node` user. Environment files, dependencies, generated Windows binaries, build output, and local uploads are excluded from the build context.
+
+For camera and microphone transmission, set LIVEKIT_URL (the browser-accessible wss:// address), LIVEKIT_API_KEY and LIVEKIT_API_SECRET in the backend environment. LIVEKIT_API_URL optionally specifies an internal HTTP endpoint for server-side participant removal. Credentials stay on the backend; short-lived tokens are scoped to the authenticated room and media role. External viewing links remain supported.

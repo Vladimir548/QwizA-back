@@ -1,3 +1,4 @@
+import { Logger } from "@nestjs/common";
 import {
   ConnectedSocket,
   MessageBody,
@@ -10,7 +11,8 @@ import {
 } from "@nestjs/websockets";
 import type { Namespace, Socket } from "socket.io";
 import { emptyPlayerMedia, parsePlayerMediaState, type PlayerMediaPeer } from "@qwiza/minigames";
-import { canUseBuiltinMedia, isReceiveOnlyMediaSdp } from "@qwiza/minigames";
+import { canUseBuiltinMedia, playerMediaIdentity } from "@qwiza/minigames";
+import { LivekitService } from "./livekit.service";
 import { RoomsService } from "./rooms.service";
 import { cookieToken, SessionService } from "../auth/session.service";
 
@@ -20,6 +22,7 @@ interface MediaSocketData {
   userId: string | null;
   sessionToken?: string;
   canBroadcast: boolean;
+  revocation?: Promise<void>;
 }
 
 @WebSocketGateway({
@@ -29,10 +32,12 @@ interface MediaSocketData {
 export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() private server!: Namespace;
   private readonly peers = new Map<string, Map<string, PlayerMediaPeer>>();
+  private readonly logger = new Logger(PlayerMediaGateway.name);
 
   constructor(
     private readonly rooms: RoomsService,
     private readonly sessions: SessionService,
+    private readonly livekit: LivekitService,
   ) {}
 
   afterInit(server: Namespace) {
@@ -76,6 +81,9 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
   handleDisconnect(socket: Socket) {
     const data = socket.data as MediaSocketData | undefined;
     if (!data) return;
+    void this.revoke(socket).catch(() =>
+      this.logger.warn("Не удалось отключить участника LiveKit"),
+    );
     const peers = this.peers.get(data.roomId);
     if (peers?.get(data.participantId)?.connectionId !== socket.id) return;
     peers.delete(data.participantId);
@@ -99,29 +107,19 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
     return { ok: true };
   }
 
-  @SubscribeMessage("media:signal")
-  async signal(@ConnectedSocket() socket: Socket, @MessageBody() value: unknown) {
+  @SubscribeMessage("media:token")
+  async connection(@ConnectedSocket() socket: Socket) {
     const { roomId, participantId } = socket.data as MediaSocketData;
-    const peers = this.peers.get(roomId);
-    if (peers?.get(participantId)?.connectionId !== socket.id || !isMediaSignal(value))
-      return { ok: false };
-    const target = peers.get(value.to);
-    if (!target || target.participantId === participantId) return { ok: false };
-    if (
-      "type" in value.signal &&
-      typeof value.signal.sdp === "string" &&
-      !isReceiveOnlyMediaSdp(value.signal.sdp) &&
-      !(await this.canBroadcast(socket))
-    )
-      return { ok: false, error: "Передача встроенного аудио и видео недоступна для этой роли" };
-    if (this.peers.get(roomId)?.get(participantId)?.connectionId !== socket.id)
-      return { ok: false };
-    this.server.to(target.connectionId).emit("media:signal", {
-      from: participantId,
-      connectionId: socket.id,
-      signal: value.signal,
-    });
-    return { ok: true };
+    try {
+      await this.rooms.authenticate(roomId, socket.handshake.auth.token as string);
+      const allowed = await this.canBroadcast(socket);
+      if (this.peers.get(roomId)?.get(participantId)?.connectionId !== socket.id)
+        return { ok: false, error: "Подключение заменено другой вкладкой" };
+      const connection = await this.livekit.connection(roomId, participantId, socket.id, allowed);
+      return { ok: true, ...connection };
+    } catch {
+      return { ok: false, error: "Видеосервер недоступен. Попробуй подключиться позже." };
+    }
   }
 
   private async canBroadcast(socket: Socket) {
@@ -131,44 +129,27 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
     return user?.id === userId && canUseBuiltinMedia(user);
   }
 
-  accountRoleChanged(userId: string) {
-    // Reconnect both directions so revoked P2P tracks cannot survive a role change.
-    for (const socket of this.server?.sockets.values() ?? []) {
-      if ((socket.data as MediaSocketData).userId !== userId) continue;
-      socket.emit("media:role-changed");
-      socket.disconnect(true);
+  async accountRoleChanged(userId: string) {
+    const sockets = [...(this.server?.sockets.values() ?? [])].filter(
+      (socket) => (socket.data as MediaSocketData).userId === userId,
+    );
+    for (const socket of sockets) socket.emit("media:role-changed");
+    try {
+      await Promise.all(sockets.map((socket) => this.revoke(socket)));
+    } finally {
+      for (const socket of sockets) socket.disconnect(true);
     }
+  }
+
+  private revoke(socket: Socket) {
+    const data = socket.data as MediaSocketData;
+    return (data.revocation ??= this.livekit.disconnect(
+      data.roomId,
+      playerMediaIdentity(data.participantId, socket.id),
+    ));
   }
 
   private broadcast(roomId: string) {
     this.server.to(roomId).emit("media:peers", [...(this.peers.get(roomId)?.values() ?? [])]);
   }
-}
-
-export function isMediaSignal(
-  value: unknown,
-): value is { to: string; signal: Record<string, unknown> } {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !("to" in value) ||
-    typeof value.to !== "string" ||
-    value.to.length > 100 ||
-    !("signal" in value)
-  )
-    return false;
-  const signal = value.signal;
-  if (!signal || typeof signal !== "object" || JSON.stringify(signal).length > 32768) return false;
-  if ("type" in signal && ["offer", "answer"].includes(String(signal.type)))
-    return "sdp" in signal && typeof signal.sdp === "string";
-  return (
-    "candidate" in signal &&
-    typeof signal.candidate === "string" &&
-    (!("sdpMid" in signal) || signal.sdpMid === null || typeof signal.sdpMid === "string") &&
-    (!("sdpMLineIndex" in signal) ||
-      signal.sdpMLineIndex === null ||
-      (typeof signal.sdpMLineIndex === "number" &&
-        Number.isInteger(signal.sdpMLineIndex) &&
-        signal.sdpMLineIndex >= 0))
-  );
 }
