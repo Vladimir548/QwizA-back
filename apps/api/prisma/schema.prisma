@@ -1,0 +1,277 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TopicDirection {
+  forward
+  reverse
+}
+
+enum QuestionKind {
+  text
+  choice
+  geo
+  image_point
+  comparison
+  numeric_closest
+  puzzle
+  spot_difference
+  matching
+  video_prediction
+}
+
+enum AnswerMode {
+  buzzer
+  everyone
+}
+
+enum GeoMapMode {
+  world
+  image
+}
+
+enum MediaKind {
+  image
+  video
+  audio
+}
+
+model Pack {
+  id          String       @id @db.Uuid
+  title       String       @db.VarChar(100)
+  description String       @db.VarChar(500)
+  published   Boolean      @default(false)
+  status      String       @default("draft") @db.VarChar(12)
+  revision    Int          @default(1)
+  authorId    String?      @db.Uuid
+  author      UserAccount? @relation("PackAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  isOfficial  Boolean      @default(false)
+  coverId     String?      @db.Uuid
+  cover       MediaAsset?  @relation("PackCover", fields: [coverId], references: [id], onDelete: SetNull)
+  submittedAt DateTime?    @db.Timestamptz(3)
+  reviewedAt  DateTime?    @db.Timestamptz(3)
+  reviewedById String?     @db.Uuid
+  reviewedBy  UserAccount? @relation("PackReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  rejectionReason String?  @db.VarChar(1000)
+  rounds      String[]     @default(["Раунд 1"])
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
+  topics      Topic[]
+  ratings     PackRating[]
+  @@index([status, submittedAt])
+  @@index([authorId])
+}
+
+model Topic {
+  id         String         @id @db.Uuid
+  packId     String         @db.Uuid
+  pack       Pack           @relation(fields: [packId], references: [id], onDelete: Cascade)
+  position   Int
+  roundIndex Int            @default(0)
+  title      String         @db.VarChar(100)
+  isFinal    Boolean        @default(false)
+  ordered    Boolean        @default(false)
+  direction  TopicDirection @default(forward)
+  questions  Question[]
+
+  @@unique([packId, position])
+  @@index([packId])
+}
+
+model Question {
+  id                    String             @id @db.Uuid
+  topicId               String             @db.Uuid
+  topic                 Topic              @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  position              Int
+  type                  QuestionKind
+  answerMode            AnswerMode         @default(buzzer)
+  answerTimeSeconds     Int                @default(30)
+  value                 Int
+  promptText            String             @db.VarChar(1000)
+  answerText            String             @db.VarChar(300)
+  acceptedAnswers       String[]           @default([])
+  questionMediaId       String?            @db.Uuid
+  questionMedia         MediaAsset?        @relation("QuestionPromptMedia", fields: [questionMediaId], references: [id], onDelete: SetNull)
+  differenceMediaId     String?            @db.Uuid
+  differenceMedia       MediaAsset?        @relation("DifferenceMedia", fields: [differenceMediaId], references: [id], onDelete: SetNull)
+  answerMediaId         String?            @db.Uuid
+  answerMedia           MediaAsset?        @relation("QuestionAnswerMedia", fields: [answerMediaId], references: [id], onDelete: SetNull)
+  geoMapMode            GeoMapMode?
+  geoMapMediaId         String?            @db.Uuid
+  geoMapMedia           MediaAsset?        @relation("GeoMapMedia", fields: [geoMapMediaId], references: [id], onDelete: SetNull)
+  choices               ChoiceOption[]
+  geoLat                Float?
+  geoLng                Float?
+  geoToleranceKm        Float?
+  imageX                Float?
+  imageY                Float?
+  imageTolerancePercent Float?
+  comparisonUnit        String?            @db.VarChar(30)
+  numericTarget         Float?
+  numericUnit           String?            @db.VarChar(30)
+  puzzleGridSize        Int?
+  differenceTargets     Json?
+  differenceTolerancePercent Float?
+  matchingPairs              Json?
+  videoStopSeconds           Float?
+  comparisonOptions     ComparisonOption[]
+
+  @@unique([topicId, position])
+  @@index([topicId])
+}
+
+model ChoiceOption {
+  id         String   @id @default(uuid()) @db.Uuid
+  questionId String   @db.Uuid
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  position   Int
+  text       String   @db.VarChar(200)
+  isCorrect  Boolean  @default(false)
+
+  @@unique([questionId, position])
+  @@index([questionId])
+}
+
+model ComparisonOption {
+  id         String      @id @db.Uuid
+  questionId String      @db.Uuid
+  question   Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  position   Int
+  label      String      @db.VarChar(200)
+  amount     Float
+  mediaId    String?     @db.Uuid
+  media      MediaAsset? @relation("ComparisonMedia", fields: [mediaId], references: [id], onDelete: SetNull)
+
+  @@unique([questionId, position])
+  @@index([questionId])
+}
+
+model MediaAsset {
+  id                String             @id @db.Uuid
+  kind              MediaKind
+  mimeType          String             @db.VarChar(30)
+  byteSize          Int
+  durationSeconds   Float?
+  createdAt         DateTime           @default(now()) @db.Timestamptz(3)
+  questionPrompts   Question[]         @relation("QuestionPromptMedia")
+  differenceImages  Question[]         @relation("DifferenceMedia")
+  questionAnswers   Question[]         @relation("QuestionAnswerMedia")
+  geoMaps           Question[]         @relation("GeoMapMedia")
+  comparisonOptions ComparisonOption[] @relation("ComparisonMedia")
+  packCovers Pack[] @relation("PackCover")
+}
+
+model GameRoom {
+  id           String            @id @db.Uuid
+  code         String            @unique @db.VarChar(8)
+  name         String            @db.VarChar(100)
+  packId       String?           @db.Uuid
+  gameMode     String            @db.VarChar(10)
+  teamCount    Int               @default(1)
+  maxPlayers   Int
+  creatorId    String            @db.Uuid
+  revision     Int               @default(0)
+  state        Json
+  pack         Json
+  deadlineAt   DateTime?         @db.Timestamptz(3)
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @db.Timestamptz(3)
+  participants GameParticipant[]
+  commands     GameCommand[]
+  events       GameRoomEvent[]
+
+  @@index([deadlineAt])
+}
+
+model GameParticipant {
+  id        String        @id @db.Uuid
+  roomId    String        @db.Uuid
+  room      GameRoom      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  tokenHash String        @unique @db.Char(64)
+  name      String        @db.VarChar(40)
+  role      String        @db.VarChar(10)
+  teamId    String?       @db.VarChar(20)
+  seatNumber Int?
+  score     Int           @default(0)
+  userId    String?       @db.Uuid
+  user      UserAccount?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  joinedAt  DateTime      @default(now()) @db.Timestamptz(3)
+  commands  GameCommand[]
+
+  @@index([roomId])
+  @@unique([roomId, userId])
+}
+
+model UserAccount {
+  id           String            @id @db.Uuid
+  email        String            @unique @db.VarChar(254)
+  displayName  String            @db.VarChar(40)
+  role         String            @default("user") @db.VarChar(10)
+  passwordHash String            @db.VarChar(255)
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
+  sessions     AuthSession[]
+  participants GameParticipant[]
+  packs Pack[] @relation("PackAuthor")
+  reviewedPacks Pack[] @relation("PackReviewer")
+  packRatings  PackRating[]
+}
+
+model PackRating {
+  packKey   String      @db.VarChar(100)
+  userId    String      @db.Uuid
+  user      UserAccount @relation(fields: [userId], references: [id], onDelete: Cascade)
+  packId    String?     @db.Uuid
+  pack      Pack?       @relation(fields: [packId], references: [id], onDelete: Cascade)
+  value     Int         @db.SmallInt
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime    @updatedAt @db.Timestamptz(3)
+
+  @@id([packKey, userId])
+  @@index([packId])
+  @@index([userId])
+}
+
+model AuthSession {
+  id        String      @id @db.Uuid
+  userId    String      @db.Uuid
+  user      UserAccount @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String      @unique @db.Char(64)
+  expiresAt DateTime    @db.Timestamptz(3)
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model GameCommand {
+  id            String          @id @db.Uuid
+  roomId        String          @db.Uuid
+  room          GameRoom        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  participantId String          @db.Uuid
+  participant   GameParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  commandId     String          @db.VarChar(80)
+  response      Json
+  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
+
+  @@unique([roomId, participantId, commandId])
+  @@index([roomId, createdAt])
+}
+
+model GameRoomEvent {
+  id        String   @id @db.Uuid
+  roomId    String   @db.Uuid
+  room      GameRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  revision  Int
+  type      String   @db.VarChar(40)
+  payload   Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([roomId, revision])
+}

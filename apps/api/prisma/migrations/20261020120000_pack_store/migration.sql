@@ -1,0 +1,3 @@
+ALTER TABLE "Pack" DROP COLUMN "hostMode";
+DROP TYPE "PackHostMode";
+ALTER TABLE "Pack" ADD COLUMN "published" BOOLEAN NOT NULL DEFAULT false;

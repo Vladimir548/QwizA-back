@@ -1,0 +1,15 @@
+node_modules/
+.next/
+dist/
+.dist-dev/
+coverage/
+artifacts/playwright/
+*.tsbuildinfo
+.env*
+!.env.example
+qwesto-app/
+*-deploy.tar.gz
+.preview/
+*.log
+apps/api/.local-data/
+apps/api/src/generated/

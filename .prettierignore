@@ -1,0 +1,7 @@
+node_modules
+.next
+dist
+qwesto-app
+package-lock.json
+apps/*/AGENTS.md
+apps/web/next-env.d.ts
