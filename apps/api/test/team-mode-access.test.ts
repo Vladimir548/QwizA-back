@@ -32,15 +32,13 @@ test("team preview requires the current account admin role for create, join and 
     ({ headers: { cookie: token ? `qwesto_session=${token}` : undefined } }) as Request;
   try {
     const regular = await auth.register({
-      email: `teams-${randomUUID()}@example.test`,
       password: randomUUID(),
-      displayName: "Игрок",
+      nickname: `Игрок-${randomUUID().slice(0, 8)}`,
     });
     accountIds.push(regular.user.id);
     const developer = await auth.register({
-      email: `teams-${randomUUID()}@example.test`,
       password: randomUUID(),
-      displayName: "Разработчик",
+      nickname: `Разработчик-${randomUUID().slice(0, 8)}`,
     });
     accountIds.push(developer.user.id);
     await prisma.userAccount.update({ where: { id: developer.user.id }, data: { role: "admin" } });

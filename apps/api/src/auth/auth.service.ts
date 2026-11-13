@@ -9,6 +9,7 @@ import { RoomsService } from "../rooms/rooms.service";
 import type { LoginDto, RegisterDto } from "./auth.dto";
 import { isRoomComplete, roomResultSummary } from "../rooms/room-statistics";
 import type { PrivateRoomState, RoomPack } from "../rooms/rooms.types";
+import { accountNickname, ensureNicknameAvailable, rejectNicknameConflict } from "./nickname";
 
 const SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -25,36 +26,36 @@ export class AuthService {
   ) {}
 
   async register(input: RegisterDto) {
-    const email = input.email.trim().toLowerCase();
-    const exists = await this.prisma.userAccount.findUnique({
-      where: { email },
-      select: { id: true },
-    });
-    if (exists) throw new ConflictException("Этот адрес уже зарегистрирован");
+    const nickname = accountNickname(input.nickname, 3);
+    await ensureNicknameAvailable(this.prisma, nickname.nicknameKey);
     const passwordHash = await argon2.hash(input.password, {
       type: argon2.argon2id,
       memoryCost: 19456,
       timeCost: 2,
       parallelism: 1,
     });
-    const user = await this.prisma.userAccount.create({
-      data: {
-        id: randomUUID(),
-        email,
-        passwordHash,
-        displayName: input.displayName?.trim() || email.split("@")[0].slice(0, 40),
-      },
-    });
+    const user = await this.prisma.userAccount
+      .create({
+        data: { id: randomUUID(), ...nickname, passwordHash },
+      })
+      .catch((error: unknown) => {
+        rejectNicknameConflict(error);
+        throw error;
+      });
     const token = await this.startSession(user.id);
     return { user: publicUser(user), token };
   }
 
   async login(input: LoginDto) {
-    const user = await this.prisma.userAccount.findUnique({
-      where: { email: input.email.trim().toLowerCase() },
-    });
+    const login = input.nickname.trim().toLowerCase();
+    // Legacy accounts can still sign in with their original email.
+    const user =
+      (await this.prisma.userAccount.findUnique({ where: { nicknameKey: login } })) ??
+      (login.includes("@")
+        ? await this.prisma.userAccount.findUnique({ where: { email: login } })
+        : null);
     if (!user || !(await argon2.verify(user.passwordHash, input.password)))
-      throw new UnauthorizedException("Неверная почта или пароль");
+      throw new UnauthorizedException("Неверный ник или пароль");
     const token = await this.startSession(user.id);
     return { user: publicUser(user), token };
   }

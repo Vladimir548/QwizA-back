@@ -4,7 +4,12 @@ import { createHash } from "node:crypto";
 import type { Request } from "express";
 import { PrismaService } from "../prisma/prisma.service";
 
-export type AccountIdentity = { id: string; email: string; displayName: string; role: string };
+export type AccountIdentity = {
+  id: string;
+  email: string | null;
+  displayName: string;
+  role: string;
+};
 export function publicUser(user: AccountIdentity) {
   return { id: user.id, email: user.email, displayName: user.displayName, role: user.role };
 }

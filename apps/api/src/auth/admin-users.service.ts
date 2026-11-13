@@ -10,6 +10,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { PlayerMediaGateway } from "../rooms/player-media.gateway";
 import type { AccountIdentity } from "./session.service";
 import type { ListUsersDto, UpdateUserDto } from "./admin-users.dto";
+import { accountNickname, ensureNicknameAvailable, rejectNicknameConflict } from "./nickname";
 
 const selection = {
   id: true,
@@ -59,8 +60,7 @@ export class AdminUsersService {
   }
 
   async update(actor: AccountIdentity, id: string, input: UpdateUserDto) {
-    const displayName = input.displayName.trim();
-    if (!displayName) throw new BadRequestException("Имя не может быть пустым");
+    const nickname = accountNickname(input.displayName);
     let roleChanged = false;
     try {
       const result = await this.prisma.$transaction(
@@ -77,10 +77,11 @@ export class AdminUsersService {
           if (!target) throw new NotFoundException("Игрок не найден");
           if (target.role !== input.expectedRole)
             throw new ConflictException("Роль уже изменена. Обнови список игроков");
+          await ensureNicknameAvailable(tx, nickname.nicknameKey, id);
           roleChanged = target.role !== input.role;
           const { _count, ...user } = await tx.userAccount.update({
             where: { id },
-            data: { displayName, role: input.role },
+            data: { ...nickname, role: input.role },
             select: selection,
           });
           return { ...user, roomCount: _count.participants };
@@ -90,6 +91,7 @@ export class AdminUsersService {
       if (roleChanged) await this.media.accountRoleChanged(id);
       return result;
     } catch (cause) {
+      rejectNicknameConflict(cause);
       if (cause instanceof Prisma.PrismaClientKnownRequestError && cause.code === "P2034")
         throw new ConflictException(
           "Профили изменились одновременно. Обнови список и попробуй ещё раз",

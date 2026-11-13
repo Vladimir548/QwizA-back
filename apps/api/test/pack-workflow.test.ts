@@ -70,9 +70,8 @@ test("author, cover, validation and versioned admin moderation protect every pub
   try {
     const register = async (name: string) => {
       const account = await auth.register({
-        email: `pack-${randomUUID()}@example.test`,
         password: "PackTestPassword123!",
-        displayName: name,
+        nickname: `${name}-${randomUUID().slice(0, 8)}`,
       });
       users.push(account.user.id);
       return account;
@@ -173,7 +172,7 @@ test("author, cover, validation and versioned admin moderation protect every pub
     pack = await workflow.review(pack.id, admin, { revision: pack.revision!, decision: "approve" });
     assert.equal(pack.status, "approved");
     assert.equal(pack.published, true);
-    assert.equal((await workflow.get(pack.id)).author?.name, "Автор");
+    assert.equal((await workflow.get(pack.id)).author?.name, owner.user.displayName);
     assert.equal(
       (await packs.store()).some((item) => item.id === pack.id),
       true,

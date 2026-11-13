@@ -28,9 +28,8 @@ test("account history returns only owned rooms with genuine solo, team and host 
   let userId: string | undefined;
   try {
     const account = await auth.register({
-      email: `history-${randomUUID()}@example.test`,
       password: randomUUID(),
-      displayName: "Игрок",
+      nickname: `Игрок-${randomUUID().slice(0, 8)}`,
     });
     userId = account.user.id;
     await assert.rejects(auth.roomsForUser(), /Войди в аккаунт/);

@@ -211,8 +211,9 @@ model GameParticipant {
 
 model UserAccount {
   id           String            @id @db.Uuid
-  email        String            @unique @db.VarChar(254)
+  email        String?           @unique @db.VarChar(254)
   displayName  String            @db.VarChar(40)
+  nicknameKey  String            @unique @db.VarChar(80)
   role         String            @default("user") @db.VarChar(10)
   passwordHash String            @db.VarChar(255)
   createdAt    DateTime          @default(now()) @db.Timestamptz(3)

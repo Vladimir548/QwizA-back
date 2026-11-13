@@ -53,8 +53,7 @@ test("pack ratings persist one vote per account, enforce publication and ownersh
   try {
     const register = async (displayName: string) => {
       const account = await auth.register({
-        email: `rating-${randomUUID()}@example.test`,
-        displayName,
+        nickname: `${displayName}-${randomUUID().slice(0, 8)}`,
         password: "RatingTestPassword123!",
       });
       users.push(account.user.id);

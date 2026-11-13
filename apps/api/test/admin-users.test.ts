@@ -39,14 +39,14 @@ test("administrator manages names and roles without exposing credentials or losi
   const prefix = `roles-${randomUUID()}`;
   try {
     const create = async (role: string) => {
+      const password = randomUUID();
       const account = await auth.register({
-        email: `${prefix}-${role}@example.test`,
-        password: randomUUID(),
-        displayName: role,
+        password,
+        nickname: `${prefix.slice(0, 30)}-${role}`,
       });
       accounts.push(account.user.id);
       await prisma.userAccount.update({ where: { id: account.user.id }, data: { role } });
-      return account;
+      return { ...account, password };
     };
     const admin = await create("admin"),
       regular = await create("user"),
@@ -58,7 +58,7 @@ test("administrator manages names and roles without exposing credentials or losi
       request(admin.token, "https://other.example"),
     ])
       await assert.rejects(controller.list(req, {}));
-    const query = { search: prefix, page: 1 };
+    const query = { search: prefix.slice(0, 30), page: 1 };
     const list = await controller.list(request(admin.token), query);
     assert.equal(list.total, 3);
     assert.ok(
@@ -79,6 +79,18 @@ test("administrator manages names and roles without exposing credentials or losi
     assert.equal(changed.role, "media");
     assert.equal((await auth.user(regular.token))?.role, "media");
     assert.deepEqual(revoked, [regular.user.id]);
+    assert.equal(
+      (await auth.login({ nickname: "НОВОЕ ИМЯ", password: regular.password })).user.id,
+      regular.user.id,
+    );
+    await assert.rejects(
+      controller.update(request(admin.token), media.user.id, {
+        displayName: "новое имя",
+        role: "media",
+        expectedRole: "media",
+      }),
+      /ник уже занят/,
+    );
     await assert.rejects(
       controller.update(request(admin.token), regular.user.id, {
         displayName: "Stale",

@@ -1,13 +1,16 @@
-import { IsEmail, IsOptional, IsString, IsUUID, Length, MinLength } from "class-validator";
+import { Transform } from "class-transformer";
+import { IsString, IsUUID, Length, MinLength } from "class-validator";
 
 export class RegisterDto {
-  @IsEmail() @Length(3, 254) email!: string;
+  @Transform(({ value }: { value: unknown }) => (typeof value === "string" ? value.trim() : value))
+  @IsString()
+  @Length(3, 40, { message: "Ник должен содержать от 3 до 40 символов" })
+  nickname!: string;
   @IsString() @MinLength(12) @Length(12, 128) password!: string;
-  @IsOptional() @IsString() @Length(1, 40) displayName?: string;
 }
 
 export class LoginDto {
-  @IsEmail() email!: string;
+  @IsString() @Length(1, 254) nickname!: string;
   @IsString() password!: string;
 }
 
