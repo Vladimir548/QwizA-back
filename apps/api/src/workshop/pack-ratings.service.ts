@@ -7,20 +7,26 @@ import {
 import { isUUID } from "class-validator";
 import type { AccountIdentity } from "../auth/session.service";
 import { PackRatingsRepository } from "./pack-ratings.repository";
-
-const builtinIds = ["mix", "cinema", "space"];
+import { PacksRepository } from "./packs.repository";
+import { isBuiltinPackId } from "@qwiza/minigames";
 
 @Injectable()
 export class PackRatingsService {
-  constructor(private readonly repository: PackRatingsRepository) {}
+  constructor(
+    private readonly repository: PackRatingsRepository,
+    private readonly packs: PacksRepository,
+  ) {}
 
-  list() {
-    return this.repository.list(builtinIds);
+  async list() {
+    return this.repository.list(await this.packs.availableBuiltinIds());
   }
 
   private async target(id: string) {
     const key = id.toLowerCase();
-    if (builtinIds.includes(key)) return { key, packId: null, authorId: null };
+    if (isBuiltinPackId(key)) {
+      if (!(await this.packs.isBuiltinAvailable(key))) throw new NotFoundException("Пак не найден");
+      return { key, packId: null, authorId: null };
+    }
     if (!isUUID(key)) throw new NotFoundException("Пак не найден");
     const pack = await this.repository.publishedPack(key);
     if (!pack) throw new NotFoundException("Оценивать можно только опубликованные паки");

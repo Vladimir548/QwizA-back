@@ -224,6 +224,10 @@ model UserAccount {
   packRatings  PackRating[]
 }
 
+model HiddenBuiltinPack {
+  id String @id
+}
+
 model PackRating {
   packKey   String      @db.VarChar(100)
   userId    String      @db.Uuid

@@ -1,9 +1,9 @@
 import { Body, Controller, Param, ParseUUIDPipe, Post } from "@nestjs/common";
 import { IsInt, Max, Min, ValidateIf } from "class-validator";
-import { JoinMinigameDto } from "./moment.dto";
+import { CreateMinigameDto, JoinMinigameDto } from "./moment.dto";
 import { NumberHuntService } from "./number-hunt.service";
 
-export class CreateNumberHuntDto extends JoinMinigameDto {
+export class CreateNumberHuntDto extends CreateMinigameDto {
   @ValidateIf((_object, value) => value !== undefined)
   @IsInt()
   @Min(6)
@@ -16,9 +16,13 @@ export class NumberHuntController {
   constructor(private readonly numberHunt: NumberHuntService) {}
   @Post()
   create(@Body() body: CreateNumberHuntDto) {
-    return this.numberHunt.create(body.displayName, {
-      numberCount: body.numberCount,
-    });
+    return this.numberHunt.create(
+      body.displayName,
+      {
+        numberCount: body.numberCount,
+      },
+      body.roundCount,
+    );
   }
   @Post(":id/join")
   join(@Param("id", new ParseUUIDPipe()) id: string, @Body() body: JoinMinigameDto) {

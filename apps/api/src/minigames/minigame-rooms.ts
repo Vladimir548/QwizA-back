@@ -5,12 +5,19 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type {
-  MinigamePlayer,
-  MinigameSession,
-  MinigameCommand,
-  MinigameSnapshot,
+import {
+  isMinigameRoundCount,
+  type MinigamePlayer,
+  type MinigameSession,
+  type MinigameCommand,
+  type MinigameSnapshot,
 } from "@qwiza/minigames";
+
+interface RoomSeries {
+  round: number;
+  roundCount: number;
+  startingScores: Map<string, number>;
+}
 
 interface GameRoom<Match> {
   id: string;
@@ -21,6 +28,7 @@ interface GameRoom<Match> {
   credentials: Map<string, string>;
   connections: Map<string, Set<string>>;
   commands: Map<string, Set<string>>;
+  series?: RoomSeries;
   sealed?: boolean;
   timer?: ReturnType<typeof setTimeout>;
 }
@@ -29,8 +37,8 @@ const tokenHash = (token: string) => createHash("sha256").update(token).digest("
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
 
 export abstract class MinigameRooms<
-  Match extends { players: MinigamePlayer[] },
-  Command extends MinigameCommand,
+  Match extends { roundId: string; players: MinigamePlayer[] },
+  Command extends MinigameCommand & { type: string },
   Settings,
   Snapshot extends MinigameSnapshot,
 > implements OnModuleDestroy {
@@ -101,7 +109,9 @@ export abstract class MinigameRooms<
     return { roomId: room.id, playerId, token };
   }
 
-  create(displayName: string, settings: Settings) {
+  create(displayName: string, settings: Settings, roundCount?: number) {
+    if (roundCount !== undefined && !isMinigameRoundCount(roundCount))
+      throw new BadRequestException("Количество раундов должно быть от 1 до 10.");
     this.prune();
     if (this.rooms.size >= 200)
       throw new BadRequestException("Сейчас все столы заняты. Попробуй позже.");
@@ -121,6 +131,8 @@ export abstract class MinigameRooms<
       credentials: new Map(),
       connections: new Map(),
       commands: new Map(),
+      series:
+        roundCount === undefined ? undefined : { round: 1, roundCount, startingScores: new Map() },
     };
     this.rooms.set(id, room);
     try {
@@ -163,23 +175,47 @@ export abstract class MinigameRooms<
   snapshot(id: string, playerId?: string): Snapshot {
     const room = this.room(id);
     this.advance(room.match, this.now());
+    const series = room.series;
     return {
       id,
       code: room.code,
       revision: room.revision,
       serverTime: this.now(),
       ...this.view(room.match, playerId),
+      ...(series && {
+        series: {
+          round: series.round,
+          roundCount: series.roundCount,
+          wins: Object.fromEntries(
+            room.match.players.map(({ id, score }) => [
+              id,
+              score - (series.startingScores.get(id) ?? 0),
+            ]),
+          ),
+        },
+      }),
     } as Snapshot;
   }
 
   command(id: string, playerId: string, command: Command) {
     const room = this.room(id);
-    if (room.sealed && "type" in command && command.type === "rematch")
-      throw new BadRequestException("Испытание темы проводится один раз.");
     const handled = room.commands.get(playerId) ?? new Set<string>();
     if (handled.has(command.id)) return this.snapshot(id, playerId);
+    const series = room.series;
+    const rematch = command.type === "rematch";
+    if (room.sealed && rematch && (!series || series.round >= series.roundCount))
+      throw new BadRequestException("Серия в викторине уже сыграна.");
+    const roundId = room.match.roundId;
     try {
       this.apply(room.match, playerId, command, this.now(), randomUUID());
+      // A rematch rotates the ID only when every participant is ready.
+      if (series && rematch && roundId !== room.match.roundId) {
+        if (series.round < series.roundCount) series.round++;
+        else {
+          series.round = 1;
+          series.startingScores = new Map(room.match.players.map(({ id, score }) => [id, score]));
+        }
+      }
       handled.add(command.id);
       if (handled.size > 100) handled.delete(handled.values().next().value!);
       room.commands.set(playerId, handled);

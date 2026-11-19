@@ -13,11 +13,18 @@ export * from "./number-hunt";
 export * from "./falling-floor";
 export * from "./sequence";
 export * from "./rockfall";
+export * from "./ice-race";
+export * from "./ice-track";
 export * from "./double-bluff";
 export * from "./firefight";
 export * from "./quiz-statistics";
 export * from "./quiz-victory";
+export * from "./quiz-buzzer";
 export * from "./player-media";
 
 export * from "./final";
 export * from "./account-access";
+export * from "./pack-catalog";
+export * from "./team-capacity";
+
+export * from "./shell-game";

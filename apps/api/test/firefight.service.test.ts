@@ -154,13 +154,13 @@ test("group topic bridge creates all seats, hides credentials from spectators, a
       view.points.find((p) => p.participantId === "c")!.points >
         view.points.find((p) => p.participantId === "b")!.points,
     );
-    assert.throws(() =>
-      service.command(id, sessions[0].playerId, {
+    for (const session of sessions)
+      service.command(id, session.playerId, {
         id: randomUUID(),
         roundId: view.snapshot.roundId,
         type: "rematch",
-      }),
-    );
+      });
+    assert.equal(service.snapshot(id).series?.round, 2);
   } finally {
     for (const s of [service, moment, zone, shooting, floor]) s.onModuleDestroy();
   }

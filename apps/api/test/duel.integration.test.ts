@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { ConfigService } from "@nestjs/config";
-import { createTwentyOneMatch, twentyOneDeck, type TwentyOneFace } from "@qwiza/minigames";
+import { QUIZ_MINIGAME_ROUNDS, twentyOneDeck, type TwentyOneFace } from "@qwiza/minigames";
 import { Prisma } from "../src/generated/prisma/client";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { PacksRepository } from "../src/workshop/packs.repository";
@@ -22,20 +22,20 @@ import type { PrivateRoomState, RoomCommandInput, RoomPack } from "../src/rooms/
 
 class FixedTwentyOne extends TwentyOneService {
   draw = false;
-  protected newMatch(_settings: undefined, roundId: string) {
+  protected override newDeck = () => {
     const top: TwentyOneFace[] = [
       { rank: "10", suit: "spades" },
       { rank: "9", suit: "spades" },
       { rank: "9", suit: "hearts" },
       { rank: this.draw ? "10" : "7", suit: "hearts" },
     ];
-    return createTwentyOneMatch(roundId, [
+    return [
       ...top,
       ...twentyOneDeck((n) => n - 1).filter(
         (c) => !top.some((t) => t.rank === c.rank && t.suit === c.suit),
       ),
-    ]);
-  }
+    ];
+  };
 }
 for (const mode of ["solo", "team"] as const)
   for (const draw of [false, true])
@@ -188,31 +188,40 @@ for (const mode of ["solo", "team"] as const)
         assert.equal((await rooms.duelMinigame(roomId, host.token)).session, null);
         assert.throws(() => cards.join(a.roomId, "Посторонний"));
         for (const s of [a, b]) cards.connect(a.roomId, s.playerId, s.playerId, true);
-        for (const s of [a, b])
-          cards.command(a.roomId, s.playerId, {
-            id: randomUUID(),
-            roundId: cards.snapshot(a.roomId).roundId,
-            type: "ready",
-          });
-        now = Math.max(...cards.snapshot(a.roomId).players.map((p) => p.busyUntil!)) + 1;
-        const privateView = await rooms.duelMinigame(roomId, first.token);
-        assert.ok(
-          privateView.snapshot.players.find(
-            (p) => p.id === b.playerId && "cards" in p && p.cards.every((c) => c.face === null),
-          ),
-        );
-        for (const s of [a, b]) {
-          const v = cards.snapshot(a.roomId, s.playerId);
-          cards.command(a.roomId, s.playerId, {
-            id: randomUUID(),
-            roundId: v.roundId,
-            type: "stand",
-            handVersion: v.players.find((p) => p.id === s.playerId)!.handVersion,
-          });
+        for (let round = 1; round <= QUIZ_MINIGAME_ROUNDS; round++) {
+          cards.draw = draw || round === QUIZ_MINIGAME_ROUNDS;
+          for (const s of [a, b])
+            cards.command(a.roomId, s.playerId, {
+              id: randomUUID(),
+              roundId: cards.snapshot(a.roomId).roundId,
+              type: round === 1 ? "ready" : "rematch",
+            });
+          const dealing = cards.snapshot(a.roomId);
+          assert.equal(dealing.series?.round, round);
+          now = Math.max(...dealing.players.map((p) => p.busyUntil!)) + 1;
+          const privateView = await rooms.duelMinigame(roomId, first.token);
+          assert.ok(
+            privateView.snapshot.players.find(
+              (p) => p.id === b.playerId && "cards" in p && p.cards.every((c) => c.face === null),
+            ),
+          );
+          for (const s of [a, b]) {
+            const v = cards.snapshot(a.roomId, s.playerId);
+            cards.command(a.roomId, s.playerId, {
+              id: randomUUID(),
+              roundId: v.roundId,
+              type: "stand",
+              handVersion: v.players.find((p) => p.id === s.playerId)!.handVersion,
+            });
+          }
+          now = cards.snapshot(a.roomId).resolvesAt! + 1;
+          await rooms.advance(roomId);
+          snapshot = await rooms.publicSnapshot(roomId);
+          if (round < QUIZ_MINIGAME_ROUNDS) {
+            assert.equal(snapshot.phase, "duel");
+            assert.equal(snapshot.statistics.byId[first.participantId].minigamesPlayed, 0);
+          }
         }
-        now = cards.snapshot(a.roomId).resolvesAt! + 1;
-        await rooms.advance(roomId);
-        snapshot = await rooms.publicSnapshot(roomId);
         assert.equal(snapshot.phase, "duel-result");
         assert.equal(snapshot.statistics.byId[first.participantId].minigamesPlayed, 1);
         assert.equal(snapshot.statistics.byId[first.participantId].minigamesWon, draw ? 0 : 1);

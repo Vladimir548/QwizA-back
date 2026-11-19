@@ -1,5 +1,5 @@
 import { MINIGAMES, minigameSupportsMode, type MinigamesForMode } from "./catalog";
-import type { MinigameKind } from "./session";
+import { isMinigameComplete, type MinigameKind, type MinigameSeries } from "./session";
 
 export type DuelMinigameKind = MinigamesForMode<"duel">;
 export const duelMinigames = () =>
@@ -63,11 +63,18 @@ export function duelTransfers(event: DuelEvent, winnerId: string | null): Record
 }
 export function duelWinner(snapshot: {
   phase: string;
+  series?: MinigameSeries;
   winnerIds?: string[];
   winnerId?: string | null;
   result?: { winnerId: string | null } | null;
 }): string | null {
-  if (snapshot.phase !== "complete") throw new Error("Дуэль ещё не завершена");
+  if (!isMinigameComplete(snapshot)) throw new Error("Дуэль ещё не завершена");
+  if (snapshot.series && snapshot.series.roundCount > 1) {
+    const scores = Object.entries(snapshot.series.wins);
+    const best = Math.max(...scores.map(([, wins]) => wins));
+    const leaders = scores.filter(([, wins]) => wins === best);
+    return leaders.length === 1 ? leaders[0][0] : null;
+  }
   return snapshot.winnerIds
     ? snapshot.winnerIds.length === 1
       ? snapshot.winnerIds[0]
@@ -81,4 +88,5 @@ export type DuelSnapshot =
   | import("./twenty-one").TwentyOneSnapshot
   | import("./number-hunt").NumberHuntSnapshot
   | import("./double-bluff").BluffSnapshot
-  | import("./firefight").FirefightSnapshot;
+  | import("./firefight").FirefightSnapshot
+  | import("./shell-game").ShellSnapshot;

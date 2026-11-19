@@ -1,7 +1,16 @@
 import { MINIGAMES, minigameSupportsMode, type MinigamesForMode } from "./catalog";
-import type { MinigameKind } from "./session";
+import type { MinigameKind, MinigameSeries } from "./session";
+import { shellPlaces } from "./shell-game";
 
 export type GroupMinigameKind = MinigamesForMode<"group">;
+export const TEAM_SELECTION_MS = 20_000;
+
+export interface TopicTeamSelection {
+  teams: { teamId: string; captainId: string; memberIds: string[] }[];
+  choices: Record<string, string>;
+  deadlineAt?: number;
+}
+
 export interface TopicMinigameEvent {
   topicId: string;
   title: string;
@@ -11,6 +20,7 @@ export interface TopicMinigameEvent {
   voterIds: string[];
   participantIds: string[];
   votes: Record<string, GroupMinigameKind>;
+  teamSelection?: TopicTeamSelection;
   selected?: GroupMinigameKind;
   leaders?: GroupMinigameKind[];
   standings?: { id: string; name: string; points: number; prize: number; place?: number }[];
@@ -18,10 +28,12 @@ export interface TopicMinigameEvent {
 
 export function topicMinigamePoints(
   players: { id: string; score: number; points?: number; eliminatedAt?: number | null }[],
+  series?: MinigameSeries,
 ) {
   return players.map((player) => ({
     id: player.id,
     points:
+      (series && series.roundCount > 1 ? series.wins[player.id] : undefined) ??
       player.points ??
       ("eliminatedAt" in player
         ? player.eliminatedAt === null
@@ -46,6 +58,7 @@ export function castTopicMinigameVote(
   game: string,
   randomIndex: (upper: number) => number,
 ): TopicMinigameEvent {
+  if (event.teamSelection) throw new Error("Сначала капитаны выбирают представителей");
   if (event.selected) throw new Error("Голосование уже завершено");
   if (!event.voterIds.includes(playerId)) throw new Error("Голосовать могут только игроки стола");
   if (!event.options.includes(game as GroupMinigameKind))
@@ -64,16 +77,64 @@ export function castTopicMinigameVote(
   return { ...next, leaders, selected: leaders[index] };
 }
 
-export function topicMinigameParticipants(
-  players: { id: string; teamId?: string | null }[],
+export function teamCaptain(members: { id: string; seatNumber?: number | null }[]) {
+  return members.reduce<(typeof members)[number] | undefined>((first, player) => {
+    if (!first || (player.seatNumber ?? Infinity) < (first.seatNumber ?? Infinity)) return player;
+    return first;
+  }, undefined)?.id;
+}
+
+export function topicMinigameRoster(
+  players: { id: string; teamId?: string | null; seatNumber?: number | null }[],
   teams: boolean,
-  topicIndex: number,
-): string[] {
-  if (!teams) return players.map((player) => player.id);
-  return [...new Set(players.map((player) => player.teamId).filter(Boolean))].map((teamId) => {
+  deadlineAt?: number,
+): Pick<TopicMinigameEvent, "voterIds" | "participantIds" | "teamSelection"> {
+  const voterIds = players.map((player) => player.id);
+  if (!teams) return { voterIds, participantIds: voterIds };
+  const teamIds = [
+    ...new Set(players.flatMap((player) => (player.teamId ? [player.teamId] : []))),
+  ].sort();
+  const participatingTeams = teamIds.map((teamId) => {
     const members = players.filter((player) => player.teamId === teamId);
-    return members[Math.max(0, topicIndex) % members.length].id;
+    return {
+      teamId,
+      captainId: teamCaptain(members)!,
+      memberIds: members.map((member) => member.id),
+    };
   });
+  return {
+    voterIds,
+    participantIds: participatingTeams.map((team) => team.captainId),
+    teamSelection: { teams: participatingTeams, choices: {}, deadlineAt },
+  };
+}
+
+export function finishTopicTeamSelection(event: TopicMinigameEvent): TopicMinigameEvent {
+  if (!event.teamSelection) return event;
+  const { teams, choices } = event.teamSelection;
+  return {
+    ...event,
+    participantIds: teams.map((team) => choices[team.teamId] ?? team.captainId),
+    teamSelection: undefined,
+  };
+}
+
+export function chooseTopicMinigamePlayer(
+  event: TopicMinigameEvent,
+  captainId: string,
+  playerId: string,
+): TopicMinigameEvent {
+  const selection = event.teamSelection;
+  if (!selection) throw new Error("Выбор участников завершён");
+  const team = selection.teams.find((entry) => entry.captainId === captainId);
+  if (!team) throw new Error("Участника выбирает капитан команды");
+  if (!team.memberIds.includes(playerId)) throw new Error("Выбери игрока из своей команды");
+  if (selection.choices[team.teamId]) throw new Error("Представитель команды уже выбран");
+  const choices = { ...selection.choices, [team.teamId]: playerId };
+  const next = { ...event, teamSelection: { ...selection, choices } };
+  return selection.teams.every((entry) => choices[entry.teamId])
+    ? finishTopicTeamSelection(next)
+    : next;
 }
 
 export function awardTopicPrizes(
@@ -82,10 +143,12 @@ export function awardTopicPrizes(
   kind?: GroupMinigameKind,
 ) {
   const sorted = [...entries].sort((a, b) => b.points - a.points || a.id.localeCompare(b.id));
+  const places = kind === "shell-game" ? shellPlaces(sorted.map(({ points }) => points)) : null;
+  const placeCount = places?.size ?? sorted.length;
   const weights =
-    kind === "sequence" && sorted[0]?.points === 10
+    places?.size === 1 || (kind === "sequence" && sorted[0]?.points === 10)
       ? [100]
-      : sorted.length === 2
+      : placeCount === 2
         ? [70, 30]
         : [50, 30, 20];
   const budgets = weights.map((weight, index) =>
@@ -97,11 +160,14 @@ export function awardTopicPrizes(
   const result: ((typeof sorted)[number] & { prize: number; place: number })[] = [];
   for (let index = 0; index < sorted.length;) {
     const tied = sorted.filter((entry) => entry.points === sorted[index].points);
-    const pool = budgets.slice(index, index + tied.length).reduce((sum, value) => sum + value, 0);
+    const place = places?.get(sorted[index].points) ?? index + 1;
+    const pool = places
+      ? (budgets[place - 1] ?? 0)
+      : budgets.slice(index, index + tied.length).reduce((sum, value) => sum + value, 0);
     tied.forEach((entry, tieIndex) =>
       result.push({
         ...entry,
-        place: index + 1,
+        place,
         prize: Math.floor(pool / tied.length) + Number(tieIndex < pool % tied.length),
       }),
     );

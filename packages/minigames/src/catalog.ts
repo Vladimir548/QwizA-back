@@ -5,7 +5,9 @@ import { MOMENT_MAX_PLAYERS } from "./precise-moment";
 import { ZONE_MAX_PLAYERS } from "./zone";
 import { SEQUENCE_MAX_PLAYERS } from "./sequence";
 import { ROCKFALL_MAX_PLAYERS } from "./rockfall";
+import { SHELL_MAX_PLAYERS } from "./shell-game";
 import { FIREFIGHT_MAX_PLAYERS } from "./firefight";
+import { ICE_RACE_MAX_PLAYERS } from "./ice-race";
 
 export type MinigameMode = "duel" | "group";
 
@@ -47,6 +49,13 @@ export const MINIGAMES = {
     formats: ["duel", "group"],
     maxPlayers: FIREFIGHT_MAX_PLAYERS,
   },
+  "shell-game": {
+    title: "Напёрстки",
+    mode: "group",
+    formats: ["duel", "group"],
+    maxPlayers: SHELL_MAX_PLAYERS,
+  },
+  "ice-race": { title: "Ледяная трасса", mode: "group", maxPlayers: ICE_RACE_MAX_PLAYERS },
 } as const satisfies Record<MinigameKind, MinigameDefinition>;
 
 type SupportedModes<K extends MinigameKind> = (typeof MINIGAMES)[K] extends {

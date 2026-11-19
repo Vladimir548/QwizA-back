@@ -52,6 +52,22 @@ test("team preview requires the current account admin role for create, join and 
       await assert.rejects(controller.create(input, denied), /Командная игра в разработке/);
     const created = await controller.create(input, request(developer.token));
     roomIds.push(created.roomId);
+    await assert.rejects(
+      controller.create({ ...input, teamCount: 4, maxPlayers: 12 }, request(developer.token)),
+      /Для четырёх команд нужно по два игрока/,
+    );
+    for (const [teamCount, maxPlayers] of [
+      [4, 8],
+      [3, 9],
+    ]) {
+      const teamRoom = await controller.create(
+        { ...input, teamCount, maxPlayers, hostEnabled: true },
+        request(developer.token),
+      );
+      roomIds.push(teamRoom.roomId);
+      assert.equal(teamRoom.snapshot.teamCount, teamCount);
+      assert.equal(teamRoom.snapshot.maxPlayers, maxPlayers);
+    }
     for (const denied of [request(), request(regular.token)])
       await assert.rejects(
         controller.join(created.roomId, { displayName: "Игрок" }, denied),

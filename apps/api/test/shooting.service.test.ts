@@ -6,7 +6,7 @@ import { validateSync } from "class-validator";
 import { SHOOTING_COOLDOWN_MS, type ShootingCommand } from "@qwiza/minigames";
 import { ShootingService } from "../src/minigames/shooting.service";
 import { parseShootingCommand, parseShootingCursor } from "../src/minigames/shooting.gateway";
-import { JoinMinigameDto } from "../src/minigames/moment.dto";
+import { CreateMinigameDto, JoinMinigameDto } from "../src/minigames/moment.dto";
 
 class TestShootingService extends ShootingService {
   private seed = 123456;
@@ -198,12 +198,20 @@ test("dynamic lobby accepts six seats, clears readiness on join and blocks disco
   }
 });
 
-test("creation requires only a name and rejects the removed playerCount parameter", () => {
+test("creation accepts 1–10 whole rounds, and invitees cannot change the round count", () => {
   const options = { whitelist: true, forbidNonWhitelisted: true };
-  const valid = Object.assign(new JoinMinigameDto(), { displayName: "Аня" });
-  assert.equal(validateSync(valid, options).length, 0);
+  for (const roundCount of [undefined, 1, 10]) {
+    const dto = Object.assign(new CreateMinigameDto(), { displayName: "Аня", roundCount });
+    assert.equal(validateSync(dto, options).length, 0);
+  }
+  for (const roundCount of [0, 11, 2.5, "3", null]) {
+    const dto = Object.assign(new CreateMinigameDto(), { displayName: "Аня", roundCount });
+    assert.ok(validateSync(dto, options).some((error) => error.property === "roundCount"));
+  }
+  const join = Object.assign(new JoinMinigameDto(), { displayName: "Аня", roundCount: 3 });
+  assert.ok(validateSync(join, options).some((error) => error.property === "roundCount"));
   for (const playerCount of [2, 4, 6, "4", null]) {
-    const dto = Object.assign(new JoinMinigameDto(), { displayName: "Аня", playerCount });
+    const dto = Object.assign(new CreateMinigameDto(), { displayName: "Аня", playerCount });
     assert.ok(validateSync(dto, options).some((error) => error.property === "playerCount"));
   }
 });

@@ -4,7 +4,9 @@ import {
   awardTopicPrizes,
   castTopicMinigameVote,
   groupMinigames,
-  topicMinigameParticipants,
+  chooseTopicMinigamePlayer,
+  finishTopicTeamSelection,
+  topicMinigameRoster,
   type TopicMinigameEvent,
 } from "../src/topic-event";
 const ballot = (count = 5): TopicMinigameEvent => ({
@@ -47,7 +49,7 @@ test("a unique plurality wins without randomness; host, duplicate and invalid vo
     });
   assert.equal(event.selected, "shooting");
 });
-test("eligibility excludes duels and over-capacity games; team representatives rotate", () => {
+test("eligibility excludes duels and over-capacity games", () => {
   for (const count of [2, 4, 5, 6, 12])
     assert.deepEqual(groupMinigames(count), [
       "moment",
@@ -57,16 +59,31 @@ test("eligibility excludes duels and over-capacity games; team representatives r
       "sequence",
       "rockfall",
       "firefight",
+      "shell-game",
+      "ice-race",
     ]);
   assert.deepEqual(groupMinigames(13), []);
+});
+test("captains choose only their own teammates and an absent choice defaults to the captain", () => {
   const players = [
-    { id: "a", teamId: "one" },
-    { id: "b", teamId: "one" },
-    { id: "c", teamId: "two" },
-    { id: "d", teamId: "two" },
+    { id: "b", teamId: "one", seatNumber: 2 },
+    { id: "a", teamId: "one", seatNumber: 1 },
+    { id: "c", teamId: "two", seatNumber: 2 },
+    { id: "d", teamId: "two", seatNumber: 3 },
   ];
-  assert.deepEqual(topicMinigameParticipants(players, true, 1), ["b", "d"]);
-  assert.deepEqual(topicMinigameParticipants(players, false, 1), ["a", "b", "c", "d"]);
+  const event = { ...ballot(), ...topicMinigameRoster(players, true, 25000) };
+  assert.deepEqual(event.participantIds, ["a", "c"]);
+  assert.throws(() => castTopicMinigameVote(event, "a", "shooting", () => 0), /представителей/);
+  assert.throws(() => chooseTopicMinigamePlayer(event, "b", "a"), /капитан/);
+  assert.throws(() => chooseTopicMinigamePlayer(event, "a", "d"), /своей команды/);
+  const pending = chooseTopicMinigamePlayer(event, "a", "b");
+  assert.throws(() => chooseTopicMinigamePlayer(pending, "a", "a"), /уже выбран/);
+  assert.deepEqual(finishTopicTeamSelection(pending).participantIds, ["b", "c"]);
+  const ready = chooseTopicMinigamePlayer(pending, "c", "d");
+  assert.equal(ready.teamSelection, undefined);
+  assert.deepEqual(ready.participantIds, ["b", "d"]);
+  assert.equal(castTopicMinigameVote(ready, "a", "shooting", () => 0).votes.a, "shooting");
+  assert.deepEqual(topicMinigameRoster(players, false).participantIds, ["b", "a", "c", "d"]);
 });
 test("prizes preserve the fund, split tied places and use 70/30 for two contestants", () => {
   const players = ["a", "b", "c", "d"].map((id, i) => ({ id, name: id, points: 4 - i }));
@@ -87,5 +104,26 @@ test("prizes preserve the fund, split tied places and use 70/30 for two contesta
   assert.equal(
     awardTopicPrizes(tied, 103).reduce((sum, p) => sum + p.prize, 0),
     103,
+  );
+});
+
+test("shell game awards each distinct place once without skipping places after a tie", () => {
+  const players = ["a", "b", "c"].map((id, i) => ({ id, name: id, points: i < 2 ? 1 : 0 }));
+  const standings = awardTopicPrizes(players, 1000, "shell-game");
+  assert.deepEqual(
+    standings.map(({ place, prize }) => [place, prize]),
+    [
+      [1, 350],
+      [1, 350],
+      [2, 300],
+    ],
+  );
+  const draw = awardTopicPrizes(players.slice(0, 2), 1001, "shell-game");
+  assert.deepEqual(
+    draw.map(({ place, prize }) => [place, prize]),
+    [
+      [1, 501],
+      [1, 500],
+    ],
   );
 });

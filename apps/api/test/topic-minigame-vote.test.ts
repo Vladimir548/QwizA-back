@@ -35,6 +35,8 @@ test("only a topic with every question answered opens a single vote, including t
     "sequence",
     "rockfall",
     "firefight",
+    "shell-game",
+    "ice-race",
   ]);
   assert.deepEqual(
     room.topicEvent?.voterIds,

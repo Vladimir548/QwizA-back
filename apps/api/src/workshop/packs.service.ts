@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { PackDto, QuestionDto } from "./dto/pack.dto";
 import { MediaService } from "./media.service";
@@ -101,9 +106,10 @@ export class PacksService {
     return this.save(input, await this.get(id));
   }
 
-  async remove(id: string) {
+  async remove(id: string, revision?: number) {
     await this.get(id);
-    await this.repository.remove(id);
+    if (!(await this.repository.remove(id, revision)))
+      throw new ConflictException("Пак изменился. Обнови страницу перед удалением");
   }
 
   async setPublished(id: string, published: boolean) {

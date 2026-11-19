@@ -4,6 +4,6 @@ export class PackPublicationDto {
 }
 export class PackReviewDto {
   @IsInt() @Min(1) revision!: number;
-  @IsIn(["approve", "reject"]) decision!: "approve" | "reject";
+  @IsIn(["approve", "reject", "revoke"]) decision!: "approve" | "reject" | "revoke";
   @IsOptional() @IsString() @MaxLength(1000) reason?: string;
 }

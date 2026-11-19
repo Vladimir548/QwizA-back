@@ -12,6 +12,7 @@ import { HockeyService } from "../src/minigames/hockey.service";
 import { TwentyOneService } from "../src/minigames/twenty-one.service";
 import { NumberHuntService } from "../src/minigames/number-hunt.service";
 import { DoubleBluffService } from "../src/minigames/double-bluff.service";
+import { ShellGameService } from "../src/minigames/shell-game.service";
 import { FirefightService } from "../src/minigames/firefight.service";
 
 test("every catalog duel creates one sealed two-player match, restores each private seat and admits spectators without credentials", () => {
@@ -24,7 +25,8 @@ test("every catalog duel creates one sealed two-player match, restores each priv
     cards = new TwentyOneService(),
     numbers = new NumberHuntService(),
     bluff = new DoubleBluffService(),
-    firefight = new FirefightService();
+    firefight = new FirefightService(),
+    shells = new ShellGameService();
   const bridge = new TopicMinigamesService(
     moment,
     zone,
@@ -38,6 +40,7 @@ test("every catalog duel creates one sealed two-player match, restores each priv
     undefined,
     bluff,
     firefight,
+    shells,
   );
   const services = {
     memory,
@@ -46,6 +49,7 @@ test("every catalog duel creates one sealed two-player match, restores each priv
     "number-hunt": numbers,
     "double-bluff": bluff,
     firefight,
+    "shell-game": shells,
   };
   const players = [
     { id: "a", name: "Аня" },

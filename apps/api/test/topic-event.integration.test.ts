@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { ConfigService } from "@nestjs/config";
+import { QUIZ_MINIGAME_ROUNDS } from "@qwiza/minigames";
 import { Prisma } from "../src/generated/prisma/client";
 import { PrismaService } from "../src/prisma/prisma.service";
 import { PacksRepository } from "../src/workshop/packs.repository";
@@ -124,6 +125,45 @@ for (const gameMode of ["solo", "team"] as const)
           assert.equal(snapshot.completed, false);
           assert.equal(snapshot.topicEvent?.prize, 500);
           const topicId = snapshot.topicEvent!.topicId;
+          if (gameMode === "team") {
+            const selection = snapshot.topicEvent!.teamSelection!;
+            assert.equal(selection.teams.length, 2);
+            const [first, second] = selection.teams;
+            const teammate = first.memberIds.find((id) => id !== first.captainId)!;
+            const sendChoice = (actorId: string, targetParticipantId: string) =>
+              command(actorId, { type: "choose-minigame-player", topicId, targetParticipantId });
+            assert.equal((await sendChoice(teammate, teammate)).ok, false);
+            assert.equal((await sendChoice(host.participantId, teammate)).ok, false);
+            assert.equal((await sendChoice(first.captainId, second.captainId)).ok, false);
+            assert.equal(
+              (
+                await command(first.captainId, {
+                  type: "vote-minigame",
+                  topicId,
+                  minigame: "shooting",
+                })
+              ).ok,
+              false,
+            );
+            assert.equal((await sendChoice(first.captainId, teammate)).ok, true);
+            const other = second.memberIds.find((id) => id !== second.captainId)!;
+            if (automatic) {
+              const current = await prisma.gameRoom.findUniqueOrThrow({ where: { id: roomId } });
+              const value = structuredClone(current.state) as unknown as PrivateRoomState;
+              value.topicEvent!.teamSelection!.deadlineAt = Date.now() - 1;
+              await save(value);
+              await rooms.advance(roomId);
+              assert.equal((await sendChoice(second.captainId, other)).ok, false);
+            } else {
+              assert.equal((await sendChoice(second.captainId, other)).ok, true);
+            }
+            snapshot = await rooms.publicSnapshot(roomId);
+            assert.equal(snapshot.topicEvent?.teamSelection, undefined);
+            assert.deepEqual(snapshot.topicEvent?.participantIds, [
+              teammate,
+              automatic ? second.captainId : other,
+            ]);
+          }
           assert.equal(
             (
               await command(host.participantId, {
@@ -186,6 +226,10 @@ for (const gameMode of ["solo", "team"] as const)
           const sessions = [];
           for (const player of players) {
             const session = (await rooms.topicMinigame(roomId, player.token)).session;
+            assert.equal(
+              Boolean(session),
+              snapshot.topicEvent!.participantIds.includes(player.participantId),
+            );
             if (session) sessions.push(session);
           }
           assert.equal(new Set(sessions.map((session) => session.roomId)).size, 1);
@@ -197,19 +241,27 @@ for (const gameMode of ["solo", "team"] as const)
           assert.throws(() => shooting.join(miniId, "Посторонний"));
           for (const session of sessions)
             shooting.connect(miniId, session.playerId, session.playerId, true);
-          for (const session of sessions)
-            shooting.command(miniId, session.playerId, {
-              id: randomUUID(),
-              roundId: shooting.snapshot(miniId).roundId,
-              type: "ready",
-            });
           assert.equal(
             (await command(creator.participantId, { type: "finish-minigame" })).ok,
             false,
           );
-          now = shooting.snapshot(miniId).endsAt! + 1;
-          await rooms.advance(roomId);
-          snapshot = await rooms.publicSnapshot(roomId);
+          for (let round = 1; round <= QUIZ_MINIGAME_ROUNDS; round++) {
+            for (const session of sessions)
+              shooting.command(miniId, session.playerId, {
+                id: randomUUID(),
+                roundId: shooting.snapshot(miniId).roundId,
+                type: round === 1 ? "ready" : "rematch",
+              });
+            const game = shooting.snapshot(miniId);
+            assert.equal(game.series?.round, round);
+            now = game.endsAt! + 1;
+            await rooms.advance(roomId);
+            snapshot = await rooms.publicSnapshot(roomId);
+            if (round < QUIZ_MINIGAME_ROUNDS) {
+              assert.equal(snapshot.phase, "minigame");
+              assert.equal(snapshot.topicEvent?.standings, undefined);
+            }
+          }
           assert.equal(snapshot.phase, "minigame-result");
           for (const entry of snapshot.topicEvent!.standings!) {
             assert.equal(snapshot.statistics.byId[entry.id].minigamesPlayed, 1);

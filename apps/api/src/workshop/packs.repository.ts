@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { BUILTIN_PACK_IDS, type BuiltinPackId } from "@qwiza/minigames";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import type { WorkshopPack } from "./workshop.model";
@@ -238,6 +239,35 @@ export class PacksRepository {
     return records.map(toWorkshopPack);
   }
 
+  catalogEntries() {
+    return this.prisma.pack.findMany({
+      where: { published: true, status: "approved" },
+      select: { id: true, createdAt: true, isOfficial: true },
+    });
+  }
+
+  async availableBuiltinIds() {
+    const hidden = new Set((await this.prisma.hiddenBuiltinPack.findMany()).map(({ id }) => id));
+    return BUILTIN_PACK_IDS.filter((id) => !hidden.has(id));
+  }
+
+  async isBuiltinAvailable(id: BuiltinPackId) {
+    return (await this.prisma.hiddenBuiltinPack.findUnique({ where: { id } })) === null;
+  }
+
+  async setBuiltinPublication(id: BuiltinPackId, published: boolean) {
+    if (published) await this.prisma.hiddenBuiltinPack.deleteMany({ where: { id } });
+    else await this.prisma.hiddenBuiltinPack.createMany({ data: { id }, skipDuplicates: true });
+  }
+
+  playCounts() {
+    return this.prisma.gameRoom.groupBy({
+      by: ["packId"],
+      where: { state: { path: ["phase"], not: "lobby" } },
+      _count: { _all: true },
+    });
+  }
+
   async find(id: string): Promise<WorkshopPack | undefined> {
     const record = await this.prisma.pack.findUnique({ where: { id }, include: packInclude });
     return record ? toWorkshopPack(record) : undefined;
@@ -292,8 +322,11 @@ export class PacksRepository {
     });
   }
 
-  async remove(id: string): Promise<void> {
-    await this.prisma.pack.delete({ where: { id } });
+  async remove(id: string, revision?: number) {
+    const result = await this.prisma.pack.deleteMany({
+      where: { id, ...(revision === undefined ? {} : { revision }) },
+    });
+    return result.count === 1;
   }
 
   async setPublished(id: string, published: boolean): Promise<void> {

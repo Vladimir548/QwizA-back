@@ -10,6 +10,7 @@ import {
   ParseUUIDPipe,
   Post,
   Put,
+  Query,
   Req,
   Res,
   UploadedFile,
@@ -23,6 +24,12 @@ import { PacksService } from "./packs.service";
 import { SessionService, cookieToken } from "../auth/session.service";
 import { PackWorkflowService } from "./pack-workflow.service";
 import { PackReviewDto, PackPublicationDto } from "./dto/pack-review.dto";
+import { PackCatalogService } from "./pack-catalog.service";
+import {
+  PackCatalogQueryDto,
+  PackDeleteQueryDto,
+  PackModerationQueryDto,
+} from "./dto/pack-catalog.dto";
 
 @Controller("workshop")
 export class WorkshopController {
@@ -31,6 +38,7 @@ export class WorkshopController {
     private readonly media: MediaService,
     private readonly sessions: SessionService,
     private readonly workflow: PackWorkflowService,
+    private readonly catalog: PackCatalogService,
   ) {}
 
   @Get("config")
@@ -83,6 +91,11 @@ export class WorkshopController {
     return this.packs.store();
   }
 
+  @Get("catalog")
+  catalogPage(@Query() query: PackCatalogQueryDto) {
+    return this.catalog.list(query);
+  }
+
   @Get("library")
   async library(@Req() request: Request) {
     return this.workflow.library(await this.sessions.user(cookieToken(request)));
@@ -109,8 +122,12 @@ export class WorkshopController {
 
   @Delete("packs/:id")
   @HttpCode(204)
-  async remove(@Param("id", ParseUUIDPipe) id: string, @Req() request: Request) {
-    return this.workflow.remove(id, await this.sessions.requireUser(request));
+  async remove(
+    @Param("id", ParseUUIDPipe) id: string,
+    @Req() request: Request,
+    @Query() query: PackDeleteQueryDto,
+  ) {
+    return this.workflow.remove(id, await this.sessions.requireUser(request), query.revision);
   }
 
   @Put("packs/:id/publication")
@@ -131,8 +148,27 @@ export class WorkshopController {
   }
 
   @Get("moderation")
-  async queue(@Req() request: Request) {
-    return this.workflow.queue(await this.sessions.requireUser(request));
+  async queue(@Req() request: Request, @Query() query: PackModerationQueryDto) {
+    return this.workflow.queue(await this.sessions.requireUser(request), query.status);
+  }
+
+  @Get("builtin-packs")
+  builtinPacks() {
+    return this.workflow.availableBuiltinIds();
+  }
+
+  @Put("builtin-packs/:id/publication")
+  @HttpCode(204)
+  async setBuiltinPublication(
+    @Param("id") id: string,
+    @Body() body: PackPublicationDto,
+    @Req() request: Request,
+  ) {
+    return this.workflow.setBuiltinPublication(
+      id,
+      body.published,
+      await this.sessions.requireUser(request),
+    );
   }
 
   @Post("packs/:id/review")

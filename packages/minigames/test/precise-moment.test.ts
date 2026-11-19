@@ -33,7 +33,13 @@ test("settings enforce bounded target, series length and twelve-seat capacity", 
   assert.throws(() => createMomentMatch({ targetMs: 2000, roundCount: 5 }, "r"));
   assert.throws(() => createMomentMatch({ targetMs: 11000, roundCount: 5 }, "r"));
   assert.throws(() => createMomentMatch({ targetMs: 3500, roundCount: 5 }, "r"));
-  assert.throws(() => createMomentMatch({ targetMs: 7000, roundCount: 4 }, "r"));
+  for (const roundCount of [0, 2.5, 11])
+    assert.throws(() => createMomentMatch({ targetMs: 7000, roundCount }, "r"));
+  for (const roundCount of [1, 4, 10])
+    assert.equal(
+      createMomentMatch({ targetMs: 7000, roundCount }, "r").settings.roundCount,
+      roundCount,
+    );
   const full = match();
   for (let i = 2; i < 12; i++) addMomentPlayer(full, `p${i}`, `Игрок ${i}`);
   assert.throws(() => addMomentPlayer(full, "extra", "Тринадцатый"));

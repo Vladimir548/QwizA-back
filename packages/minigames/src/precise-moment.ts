@@ -1,3 +1,6 @@
+import { isMinigameRoundCount, type MinigameSnapshot } from "./session";
+
+export const MOMENT_DEFAULT_ROUNDS = 5;
 export const MOMENT_COUNTDOWN_MS = 3000;
 export const MOMENT_MIN_PLAYERS = 2;
 export const MOMENT_MAX_PLAYERS = 12;
@@ -26,15 +29,10 @@ export interface MomentRoundResult {
   attempts: MomentAttempt[];
 }
 
-export interface MomentSnapshot {
-  id: string;
-  code: string;
-  revision: number;
-  serverTime: number;
+export interface MomentSnapshot extends MinigameSnapshot {
   phase: "lobby" | "countdown" | "running" | "result" | "complete";
   settings: MomentSettings;
   round: number;
-  roundId: string;
   startsAt: number | null;
   endsAt: number | null;
   players: MomentPlayer[];
@@ -77,9 +75,9 @@ export function createMomentMatch(settings: MomentSettings, roundId: string): Mo
     settings.targetMs < 3000 ||
     settings.targetMs > 10000 ||
     settings.targetMs % 1000 !== 0 ||
-    ![3, 5, 7].includes(settings.roundCount)
+    !isMinigameRoundCount(settings.roundCount)
   )
-    throw new Error("Цель должна быть от 3 до 10 целых секунд, серия — из 3, 5 или 7 раундов.");
+    throw new Error("Цель должна быть от 3 до 10 целых секунд, серия — от 1 до 10 раундов.");
   return {
     settings: { ...settings },
     phase: "lobby",

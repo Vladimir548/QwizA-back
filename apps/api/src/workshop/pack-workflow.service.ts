@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { isBuiltinPackId, type PackModerationFilter } from "@qwiza/minigames";
 import type { AccountIdentity } from "../auth/session.service";
 import type { PackDto } from "./dto/pack.dto";
 import { PacksRepository } from "./packs.repository";
@@ -52,9 +53,9 @@ export class PackWorkflowService {
     await this.owned(id, actor);
     return this.packs.update(id, input);
   }
-  async remove(id: string, actor: AccountIdentity) {
-    await this.owned(id, actor);
-    return this.packs.remove(id);
+  async remove(id: string, actor: AccountIdentity, revision?: number) {
+    const pack = await this.owned(id, actor);
+    return this.packs.remove(id, revision ?? pack.revision);
   }
   async publication(id: string, submit: boolean, actor: AccountIdentity) {
     const pack = await this.owned(id, actor);
@@ -94,29 +95,47 @@ export class PackWorkflowService {
   private admin(actor: AccountIdentity) {
     if (actor.role !== "admin") throw new ForbiddenException("Раздел доступен администратору");
   }
-  queue(actor: AccountIdentity) {
+  availableBuiltinIds() {
+    return this.repository.availableBuiltinIds();
+  }
+  async setBuiltinPublication(id: string, published: boolean, actor: AccountIdentity) {
     this.admin(actor);
-    return this.repository.list({ status: "pending" });
+    if (!isBuiltinPackId(id)) throw new NotFoundException("Встроенный пак не найден");
+    await this.repository.setBuiltinPublication(id, published);
+  }
+  queue(actor: AccountIdentity, status: PackModerationFilter = "pending") {
+    this.admin(actor);
+    if (status === "official") return this.repository.list({ isOfficial: true });
+    return this.repository.list(status === "all" ? {} : { status });
   }
   async review(
     id: string,
     actor: AccountIdentity,
-    input: { revision: number; decision: "approve" | "reject"; reason?: string },
+    input: { revision: number; decision: "approve" | "reject" | "revoke"; reason?: string },
   ) {
     this.admin(actor);
     const pack = await this.packs.get(id);
     const reason = input.reason?.trim();
-    if (input.decision === "reject" && !reason)
-      throw new BadRequestException("Напиши причину отклонения");
+    if (input.decision !== "approve" && !reason)
+      throw new BadRequestException(
+        input.decision === "revoke"
+          ? "Напиши причину отзыва одобрения"
+          : "Напиши причину отклонения",
+      );
     if (input.decision === "approve" && !(await this.check(pack)).valid)
       throw new BadRequestException("Пак не прошёл проверку содержимого");
-    const updated = await this.repository.transition(id, input.revision, "pending", {
-      status: input.decision === "approve" ? "approved" : "rejected",
-      published: input.decision === "approve",
-      reviewedAt: new Date(),
-      reviewedById: actor.id,
-      rejectionReason: input.decision === "reject" ? reason : null,
-    });
+    const updated = await this.repository.transition(
+      id,
+      input.revision,
+      input.decision === "revoke" ? "approved" : "pending",
+      {
+        status: input.decision === "approve" ? "approved" : "rejected",
+        published: input.decision === "approve",
+        reviewedAt: new Date(),
+        reviewedById: actor.id,
+        rejectionReason: input.decision !== "approve" ? reason : null,
+      },
+    );
     if (!updated)
       throw new ConflictException("Эта версия уже проверена или изменена автором. Обнови очередь");
     return this.packs.get(id);

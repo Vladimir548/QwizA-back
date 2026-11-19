@@ -1,3 +1,5 @@
+import { ShellGameService } from "../minigames/shell-game.service";
+import { IceRaceService } from "../minigames/ice-race.service";
 import { MemoryService } from "../minigames/memory.service";
 import { DoubleBluffService } from "../minigames/double-bluff.service";
 import { FirefightService } from "../minigames/firefight.service";
@@ -13,7 +15,12 @@ import type {
   DuelMinigameKind,
   MinigameKind,
 } from "@qwiza/minigames";
-import { topicMinigamePoints, duelWinner } from "@qwiza/minigames";
+import {
+  topicMinigamePoints,
+  duelWinner,
+  isMinigameComplete,
+  QUIZ_MINIGAME_ROUNDS,
+} from "@qwiza/minigames";
 import { MomentService } from "../minigames/moment.service";
 import { ZoneService } from "../minigames/zone.service";
 import { ShootingService } from "../minigames/shooting.service";
@@ -40,8 +47,18 @@ export class TopicMinigamesService {
     @Optional() private readonly rockfall?: RockfallService,
     @Optional() private readonly bluff?: DoubleBluffService,
     @Optional() private readonly firefight?: FirefightService,
+    @Optional() private readonly shells?: ShellGameService,
+    @Optional() private readonly iceRaces?: IceRaceService,
   ) {}
   private service(kind: GroupMinigameKind) {
+    if (kind === "ice-race") {
+      if (!this.iceRaces) throw new Error("Сервис ледяной трассы недоступен");
+      return this.iceRaces;
+    }
+    if (kind === "shell-game") {
+      if (!this.shells) throw new Error("Сервис напёрстков недоступен");
+      return this.shells;
+    }
     if (kind === "firefight") {
       if (!this.firefight) throw new Error("Сервис перестрелки недоступен");
       return this.firefight;
@@ -71,20 +88,7 @@ export class TopicMinigamesService {
       const sessions: Record<string, MinigameSession> = {};
       const first = players.find((player) => player.id === event.participantIds[0])!;
       const name = first.name.slice(0, 24);
-      const session =
-        kind === "firefight"
-          ? this.firefight!.create(name, { mode: "group" })
-          : kind === "rockfall"
-            ? this.rockfall!.create(name, undefined)
-            : kind === "sequence"
-              ? this.sequence!.create(name, undefined)
-              : kind === "moment"
-                ? this.moments.create(name, { roundCount: 3 })
-                : kind === "zone"
-                  ? this.zones.create(name, undefined)
-                  : kind === "shooting"
-                    ? this.shooting.create(name, undefined)
-                    : this.floors.create(name, undefined);
+      const session = this.createGroup(kind, name);
       sessions[first.id] = session;
       for (const id of event.participantIds.slice(1)) {
         const player = players.find((person) => person.id === id)!;
@@ -98,6 +102,29 @@ export class TopicMinigamesService {
     }
     return match;
   }
+
+  private createGroup(kind: GroupMinigameKind, name: string): MinigameSession {
+    switch (kind) {
+      case "ice-race":
+        return this.iceRaces!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
+      case "shell-game":
+        return this.shells!.create(name, { mode: "group" }, QUIZ_MINIGAME_ROUNDS);
+      case "firefight":
+        return this.firefight!.create(name, { mode: "group" }, QUIZ_MINIGAME_ROUNDS);
+      case "rockfall":
+        return this.rockfall!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
+      case "sequence":
+        return this.sequence!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
+      case "moment":
+        return this.moments.create(name, { roundCount: QUIZ_MINIGAME_ROUNDS });
+      case "zone":
+        return this.zones.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
+      case "shooting":
+        return this.shooting.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
+      case "falling-floor":
+        return this.floors.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
+    }
+  }
   view(
     roomId: string,
     event: TopicMinigameEvent,
@@ -107,7 +134,8 @@ export class TopicMinigamesService {
     const match = this.ensure(roomId, event, players);
     const session = Object.values(match.sessions)[0];
     const snapshot = this.service(match.kind as GroupMinigameKind).snapshot(session.roomId);
-    const points = topicMinigamePoints(snapshot.players).map((player) => ({
+    const series = isMinigameComplete(snapshot) ? snapshot.series : undefined;
+    const points = topicMinigamePoints(snapshot.players, series).map((player) => ({
       participantId: Object.entries(match.sessions).find(
         ([, entry]) => entry.playerId === player.id,
       )![0],
@@ -144,13 +172,14 @@ export class TopicMinigamesService {
     }
     const session = participantId ? (match.sessions[participantId] ?? null) : null;
     const snapshot = service.snapshot(Object.values(match.sessions)[0].roomId, session?.playerId);
-    const miniWinner = snapshot.phase === "complete" ? duelWinner(snapshot) : null;
+    const miniWinner = isMinigameComplete(snapshot) ? duelWinner(snapshot) : null;
     const winnerId = miniWinner
       ? Object.entries(match.sessions).find(([, s]) => s.playerId === miniWinner)![0]
       : null;
     return { session, snapshot, winnerId };
   }
   private duelService(kind: DuelMinigameKind) {
+    if (kind === "shell-game") return this.shells!;
     if (kind === "firefight") return this.firefight!;
     if (kind === "double-bluff") return this.bluff!;
     return kind === "memory"
@@ -162,14 +191,17 @@ export class TopicMinigamesService {
           : this.numberHunt!;
   }
   private createDuel(kind: DuelMinigameKind, name: string) {
-    if (kind === "firefight") return this.firefight!.create(name, { mode: "duel" });
-    if (kind === "double-bluff") return this.bluff!.create(name, undefined);
+    if (kind === "shell-game")
+      return this.shells!.create(name, { mode: "duel" }, QUIZ_MINIGAME_ROUNDS);
+    if (kind === "firefight")
+      return this.firefight!.create(name, { mode: "duel" }, QUIZ_MINIGAME_ROUNDS);
+    if (kind === "double-bluff") return this.bluff!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
     return kind === "memory"
-      ? this.memory!.create(name, undefined)
+      ? this.memory!.create(name, undefined, QUIZ_MINIGAME_ROUNDS)
       : kind === "hockey"
-        ? this.hockey!.create(name, undefined)
+        ? this.hockey!.create(name, undefined, QUIZ_MINIGAME_ROUNDS)
         : kind === "twenty-one"
-          ? this.twentyOne!.create(name, undefined)
-          : this.numberHunt!.create(name, {});
+          ? this.twentyOne!.create(name, undefined, QUIZ_MINIGAME_ROUNDS)
+          : this.numberHunt!.create(name, {}, QUIZ_MINIGAME_ROUNDS);
   }
 }

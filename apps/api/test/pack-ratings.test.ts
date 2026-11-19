@@ -44,7 +44,10 @@ test("pack ratings persist one vote per account, enforce publication and ownersh
     new RoomsService(prisma, new PacksRepository(prisma)),
     sessions,
   );
-  const service = new PackRatingsService(new PackRatingsRepository(prisma));
+  const service = new PackRatingsService(
+    new PackRatingsRepository(prisma),
+    new PacksRepository(prisma),
+  );
   const controller = new PackRatingsController(service, sessions);
   const users: string[] = [],
     packs: string[] = [];
@@ -113,7 +116,10 @@ test("pack ratings persist one vote per account, enforce publication and ownersh
     ]);
     assert.equal((await controller.get(pack.id, request())).count, 2);
     await controller.rate(pack.id, { value: 1 }, request(first.token));
-    const reloaded = new PackRatingsService(new PackRatingsRepository(prisma));
+    const reloaded = new PackRatingsService(
+      new PackRatingsRepository(prisma),
+      new PacksRepository(prisma),
+    );
     assert.equal((await reloaded.get(pack.id, first.user)).myRating, 1);
     assert.equal((await controller.get(pack.id, request())).myRating, null);
     const list = await controller.list();

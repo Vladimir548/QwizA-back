@@ -186,6 +186,7 @@ export interface RoomCommandInput {
     | "cancel-duel"
     | "finish-duel"
     | "vote-minigame"
+    | "choose-minigame-player"
     | "finish-minigame"
     | "buzz"
     | "skip"

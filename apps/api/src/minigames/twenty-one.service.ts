@@ -20,8 +20,10 @@ export class TwentyOneService extends MinigameRooms<
   undefined,
   TwentyOneSnapshot
 > {
+  protected newDeck = () => twentyOneDeck(randomInt);
+
   protected newMatch(_settings: undefined, roundId: string) {
-    return createTwentyOneMatch(roundId, twentyOneDeck(randomInt));
+    return createTwentyOneMatch(roundId, this.newDeck());
   }
   protected addPlayer = addTwentyOnePlayer;
   protected advance = advanceTwentyOne;
@@ -32,9 +34,7 @@ export class TwentyOneService extends MinigameRooms<
     now: number,
     nextRoundId: string,
   ) {
-    applyTwentyOneCommand(match, playerId, command, now, nextRoundId, () =>
-      twentyOneDeck(randomInt),
-    );
+    applyTwentyOneCommand(match, playerId, command, now, nextRoundId, this.newDeck);
   }
   protected view(match: TwentyOneMatch, playerId?: string) {
     return twentyOnePublicState(match, playerId, this.now());

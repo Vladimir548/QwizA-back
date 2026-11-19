@@ -1,8 +1,14 @@
 import { applyRoomDuel } from "./room-duels";
 import { captureRoomStatistics, isRoomComplete, roomResultSummary } from "./room-statistics";
-import { createQuizStatistics, defaultVictoryRules, isVictoryRules } from "@qwiza/minigames";
-import { eligibleHostBuzzPlayers, pauseHostBuzzer, resumeHostBuzzer } from "./host-buzzer";
-import { duelTransfers } from "@qwiza/minigames";
+import {
+  createQuizStatistics,
+  defaultVictoryRules,
+  isVictoryRules,
+  maxPlayersPerTeam,
+  MIN_PLAYERS_PER_TEAM,
+} from "@qwiza/minigames";
+import { eligibleBuzzPlayers, pauseBuzzClock, resumeBuzzer } from "./host-buzzer";
+import { duelTransfers, isMinigameComplete } from "@qwiza/minigames";
 import { rewardCorrectAnswer } from "./bonus-rewards";
 import {
   BadRequestException,
@@ -32,7 +38,12 @@ import type {
 import type { CreateRoomDto, JoinRoomDto } from "./rooms.dto";
 import { matchesTextAnswer, normalizeAnswer } from "./text-answer";
 import { skipRoomTopic } from "./topic-skipping";
-import { awardTopicPrizes, castTopicMinigameVote } from "@qwiza/minigames";
+import {
+  awardTopicPrizes,
+  castTopicMinigameVote,
+  chooseTopicMinigamePlayer,
+  finishTopicTeamSelection,
+} from "@qwiza/minigames";
 import { openTopicMinigameVote } from "./topic-minigame-vote";
 import { TopicMinigamesService } from "./topic-minigames.service";
 
@@ -620,14 +631,20 @@ export class RoomsService implements OnModuleInit {
         teamCount < 2 ||
         teamCount > 4 ||
         input.maxPlayers % teamCount !== 0 ||
-        input.maxPlayers / teamCount < 2 ||
-        input.maxPlayers / teamCount > 3)
+        input.maxPlayers / teamCount < MIN_PLAYERS_PER_TEAM ||
+        input.maxPlayers / teamCount > maxPlayersPerTeam(teamCount))
     )
-      throw new BadRequestException("В каждой команде должно быть от двух до трёх игроков");
+      throw new BadRequestException(
+        teamCount === 4
+          ? "Для четырёх команд нужно по два игрока в каждой"
+          : "В каждой команде должно быть от двух до трёх игроков",
+      );
     if (!input.name.trim() || !input.displayName.trim())
       throw new BadRequestException("Укажи название комнаты и имя игрока");
     const requestedPack = input.packId ? await this.packs.find(input.packId) : undefined;
     if (input.packId && !requestedPack) throw new NotFoundException("Пак не найден");
+    if (!input.packId && !(await this.packs.isBuiltinAvailable("mix")))
+      throw new NotFoundException("Стартовый пак недоступен. Выбери другой пак");
     const pack = requestedPack ? workshopPack(requestedPack) : starterPack;
     if (
       pack.topics.some(
@@ -648,7 +665,7 @@ export class RoomsService implements OnModuleInit {
       statistics: createQuizStatistics(),
       phase: "lobby",
       hostEnabled,
-      hostRebuzzEnabled: hostEnabled && (input.hostRebuzzEnabled ?? true),
+      hostRebuzzEnabled: input.hostRebuzzEnabled ?? true,
       played: [],
       buzzCandidates: [],
       responses: [],
@@ -1012,7 +1029,7 @@ export class RoomsService implements OnModuleInit {
             bonusOpensAt: state.bonusOpensAt,
             buzzOpensAt: state.buzzOpensAt,
             deadlineAt: state.deadlineAt,
-            buzzRemainingMs: state.buzzRemainingMs,
+            buzzRemainingMs: state.deadlineAt === undefined ? state.buzzRemainingMs : undefined,
             answerTimeSeconds: question.answerTimeSeconds,
           }
         : undefined,
@@ -1036,7 +1053,7 @@ export class RoomsService implements OnModuleInit {
       audioSkippedPlayers: state.audioSkippedPlayers ?? [],
       powersEnabled: state.powersEnabled ?? false,
       topicMinigamesEnabled: state.topicMinigamesEnabled ?? true,
-      hostRebuzzEnabled: hostIsEnabled(room) && state.hostRebuzzEnabled !== false,
+      hostRebuzzEnabled: state.hostRebuzzEnabled !== false,
       powersByPlayer: state.powersByPlayer ?? {},
       correctAnswers: state.correctAnswers ?? {},
       activePowers: state.activePowers ?? {},
@@ -1066,9 +1083,12 @@ export class RoomsService implements OnModuleInit {
   }
 
   private nextWakeup(state: PrivateRoomState) {
-    const times = [state.buzzResolveAt, state.deadlineAt, state.pickerRouletteEndsAt].filter(
-      (value): value is number => !!value,
-    );
+    const times = [
+      state.buzzResolveAt,
+      state.deadlineAt,
+      state.pickerRouletteEndsAt,
+      state.topicEvent?.teamSelection?.deadlineAt,
+    ].filter((value): value is number => !!value);
     return times.length ? Math.min(...times) : undefined;
   }
 
@@ -1137,6 +1157,7 @@ export class RoomsService implements OnModuleInit {
       (state.hostEnabled ? state.lastJudgedCorrectId : undefined) ??
       nextQuestionPicker(participants, state.pickerId, state.responses, state.buzzWinnerId);
     state.phase = "result";
+    state.buzzRemainingMs = undefined;
     state.buzzResolveAt = undefined;
     state.buzzCandidates = [];
     state.result = {
@@ -1175,6 +1196,13 @@ export class RoomsService implements OnModuleInit {
         const state = parseState(room);
         const now = Date.now();
         const pack = parsePack(room);
+        if (state.phase === "minigame-vote" && state.topicEvent) {
+          const deadline = state.topicEvent.teamSelection?.deadlineAt;
+          if (deadline !== undefined && now >= deadline) {
+            state.topicEvent = finishTopicTeamSelection(state.topicEvent);
+            changed = true;
+          }
+        }
         if (state.phase === "final" && state.final && state.final.deadlineAt <= now) {
           const changes = progressRoomFinal(state, pack, null, { type: "tick" }, now);
           for (const change of changes)
@@ -1192,7 +1220,7 @@ export class RoomsService implements OnModuleInit {
           | undefined;
         if (state.phase === "duel" && state.duel && this.topicGames) {
           const view = this.topicGames.duelView(roomId, state.duel, room.participants);
-          if (view.snapshot.phase === "complete") {
+          if (isMinigameComplete(view.snapshot)) {
             for (const [id, delta] of Object.entries(duelTransfers(state.duel, view.winnerId))) {
               await tx.gameParticipant.update({
                 where: { id },
@@ -1213,7 +1241,7 @@ export class RoomsService implements OnModuleInit {
         }
         if (state.phase === "minigame" && state.topicEvent?.selected && this.topicGames) {
           const view = this.topicGames.view(roomId, state.topicEvent, room.participants);
-          if (view.snapshot.phase === "complete") {
+          if (isMinigameComplete(view.snapshot)) {
             const players = room.participants.filter((person) => person.role === "player");
             const entries = view.points.map((entry) => {
               const player = players.find((person) => person.id === entry.participantId)!;
@@ -1304,6 +1332,7 @@ export class RoomsService implements OnModuleInit {
               pack,
               room.participants.filter((person) => person.role === "player"),
               room.gameMode === "team",
+              now,
             );
             state.currentQuestionId = undefined;
             state.openedAt = undefined;
@@ -1363,6 +1392,7 @@ export class RoomsService implements OnModuleInit {
         "cancel-duel",
         "finish-duel",
         "vote-minigame",
+        "choose-minigame-player",
         "finish-minigame",
         "buzz",
         "skip",
@@ -1576,6 +1606,27 @@ export class RoomsService implements OnModuleInit {
           state.pickerId = candidates[randomInt(candidates.length)].id;
           beginRoundLoading(state, pack, activeRound(pack, state), "presentation", now);
         }
+      } else if (input.type === "choose-minigame-player") {
+        if (
+          state.phase !== "minigame-vote" ||
+          !state.topicEvent ||
+          input.topicId !== state.topicEvent.topicId ||
+          (state.topicEvent.teamSelection?.deadlineAt ?? Infinity) <= now
+        )
+          error = "Этот выбор участников уже завершён";
+        else if (participant.role !== "player" || typeof input.targetParticipantId !== "string")
+          error = "Участника выбирает капитан команды";
+        else {
+          try {
+            state.topicEvent = chooseTopicMinigamePlayer(
+              state.topicEvent,
+              participantId,
+              input.targetParticipantId,
+            );
+          } catch (cause) {
+            error = cause instanceof Error ? cause.message : "Не удалось выбрать участника";
+          }
+        }
       } else if (input.type === "vote-minigame") {
         if (state.phase !== "minigame-vote" || !state.topicEvent) error = "Сейчас нет голосования";
         else if (input.topicId !== state.topicEvent.topicId)
@@ -1696,11 +1747,11 @@ export class RoomsService implements OnModuleInit {
         )
           error = "Нажатие уже принято";
         else if (state.skippedPlayers?.includes(participant.id)) error = "Ты уже пропустил вопрос";
-        else if (state.hostEnabled && !eligibleHostBuzzPlayers(state, [participant]).length)
-          error = "Ты уже ответил на этот вопрос";
         else if (state.frozenPlayerId === participant.id) error = "Ты заморожен на этот вопрос";
+        else if (!eligibleBuzzPlayers(state, [participant]).length)
+          error = "Ты уже ответил на этот вопрос";
         else {
-          pauseHostBuzzer(state, now);
+          pauseBuzzClock(state, now);
           state.buzzCandidates.push({ participantId, receivedAt });
           state.buzzResolveAt ??= now + ARBITRATION_MS;
           queued = true;
@@ -1721,21 +1772,18 @@ export class RoomsService implements OnModuleInit {
         else if (state.buzzWinnerId || state.buzzCandidates.length)
           error = "Кнопка ответа уже нажата";
         else if (state.skippedPlayers?.includes(participantId)) error = "Ты уже пропустил вопрос";
+        else if (state.responses.some((response) => response.participantId === participantId))
+          error = "Ты уже ответил на этот вопрос";
         else {
           state.skippedPlayers ??= [];
           state.skippedPlayers.push(participantId);
-          const players = room.participants.filter((item) => item.role === "player");
-          if (
-            state.hostEnabled
-              ? !eligibleHostBuzzPlayers(state, players).length
-              : players.every((item) => state.skippedPlayers!.includes(item.id))
-          ) {
+          if (!eligibleBuzzPlayers(state, room.participants).length) {
             if (state.hostEnabled) {
               state.phase = "review";
               state.deadlineAt = undefined;
             } else {
               await this.finish(tx, state, question, now, room.participants);
-              state.result!.skipped = true;
+              if (!state.responses.length) state.result!.skipped = true;
             }
           }
         }
@@ -1988,7 +2036,14 @@ export class RoomsService implements OnModuleInit {
             if (state.hostEnabled) {
               state.phase = "review";
               state.deadlineAt = undefined;
-            } else await this.finish(tx, state, question, now, room.participants);
+            } else if (
+              question.answerMode !== "buzzer" ||
+              question.type === "numeric-closest" ||
+              correct ||
+              !resumeBuzzer(state, room.participants, now)
+            ) {
+              await this.finish(tx, state, question, now, room.participants);
+            }
           }
         }
       } else if (input.type === "finish-review") {
@@ -2020,6 +2075,12 @@ export class RoomsService implements OnModuleInit {
           error = "Решение принимает только ведущий";
         else if (!["question", "review"].includes(state.phase) || !question)
           error = "Сейчас нет ответа на проверке";
+        else if (
+          question.answerMode === "buzzer" &&
+          state.responses.some((item) => item.judged) &&
+          now < (state.buzzOpensAt ?? 0)
+        )
+          error = "Дождись повторного открытия кнопки";
         else if (question.questionMedia?.kind === "audio" && now < (state.readingEndsAt ?? 0))
           error = "Дождись окончания музыкального фрагмента";
         else if (!target || target.role !== "player") error = "Игрок не найден";
@@ -2054,7 +2115,7 @@ export class RoomsService implements OnModuleInit {
           judgedScore = { participantId: response.participantId, delta: response.scoreDelta };
           rewardCorrectAnswer(state, response);
           if (question.answerMode === "buzzer") {
-            if (correct || !resumeHostBuzzer(state, room.participants, now))
+            if (correct || !resumeBuzzer(state, room.participants, now))
               await this.finish(tx, state, question, now, room.participants);
           } else if (
             state.responses.every((item) => item.judged) &&
@@ -2076,6 +2137,7 @@ export class RoomsService implements OnModuleInit {
             pack,
             room.participants.filter((person) => person.role === "player"),
             room.gameMode === "team",
+            now,
           );
           state.currentQuestionId = undefined;
           state.openedAt = undefined;

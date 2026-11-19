@@ -2,7 +2,13 @@ import "reflect-metadata";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
-import { awardTopicPrizes, type TopicMinigameEvent } from "@qwiza/minigames";
+import {
+  awardTopicPrizes,
+  isMinigameComplete,
+  QUIZ_MINIGAME_ROUNDS,
+  SEQUENCE_ROUNDS,
+  type TopicMinigameEvent,
+} from "@qwiza/minigames";
 import { TopicMinigamesService } from "../src/rooms/topic-minigames.service";
 import { MomentService } from "../src/minigames/moment.service";
 import { ZoneService } from "../src/minigames/zone.service";
@@ -10,7 +16,7 @@ import { ShootingService } from "../src/minigames/shooting.service";
 import { FallingFloorService } from "../src/minigames/falling-floor.service";
 import { SequenceService } from "../src/minigames/sequence.service";
 
-test("a sealed topic sequence game maps ten-round co-winners back to quiz participants and splits the full fund", () => {
+test("a sealed sequence series waits for three games and splits the full fund between co-winners", () => {
   const moment = new MomentService(),
     zone = new ZoneService(),
     shooting = new ShootingService(),
@@ -57,30 +63,39 @@ test("a sealed topic sequence game maps ten-round co-winners back to quiz partic
     for (const [index, s] of sessions.entries()) {
       sequence.connect(id, s.playerId, `s${index}`, true);
     }
-    for (const s of sessions) {
-      sequence.command(id, s.playerId, {
-        id: randomUUID(),
-        roundId: sequence.snapshot(id).roundId,
-        type: "ready",
-      });
-    }
-    for (let round = 1; round <= 10; round++) {
-      const shown = sequence.snapshot(id);
-      const answer = [...shown.sequence!];
-      now = shown.deadline!;
-      for (const s of sessions)
+    for (let game = 1; game <= QUIZ_MINIGAME_ROUNDS; game++) {
+      const readyRoundId = sequence.snapshot(id).roundId;
+      for (const s of sessions) {
         sequence.command(id, s.playerId, {
           id: randomUUID(),
-          roundId: shown.roundId,
-          type: "submit",
-          round,
-          answer,
+          roundId: readyRoundId,
+          type: game === 1 ? "ready" : "rematch",
         });
-      const next = sequence.snapshot(id);
-      if (next.phase === "between") {
-        now = next.deadline!;
-        sequence.snapshot(id);
       }
+      for (let round = 1; round <= SEQUENCE_ROUNDS; round++) {
+        const shown = sequence.snapshot(id);
+        assert.equal(shown.series?.round, game);
+        const answer = [...shown.sequence!];
+        now = shown.deadline!;
+        for (const s of sessions)
+          sequence.command(id, s.playerId, {
+            id: randomUUID(),
+            roundId: shown.roundId,
+            type: "submit",
+            round,
+            answer,
+          });
+        const next = sequence.snapshot(id);
+        if (next.phase === "between") {
+          now = next.deadline!;
+          sequence.snapshot(id);
+        }
+      }
+      const checkpoint = bridge.view("quiz", event, players);
+      assert.equal(isMinigameComplete(checkpoint.snapshot), game === QUIZ_MINIGAME_ROUNDS);
+      assert.ok(Object.values(checkpoint.snapshot.series!.wins).every((wins) => wins === game));
+      if (isMinigameComplete(checkpoint.snapshot))
+        assert.ok(checkpoint.points.every(({ points }) => points === game));
     }
     const view = bridge.view("quiz", event, players);
     assert.equal(view.snapshot.phase, "complete");

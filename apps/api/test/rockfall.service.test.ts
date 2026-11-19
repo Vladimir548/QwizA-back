@@ -126,13 +126,13 @@ test("topic games can select and seal Rockfall and rank players by server surviv
     assert.equal(view.snapshot.phase, "complete");
     assert.equal(view.session, null);
     assert.equal(view.points.find((p) => p.participantId === "c")!.points, Number.MAX_SAFE_INTEGER);
-    assert.throws(() =>
-      rocks.command(id, sessions[0].playerId, {
+    for (const session of sessions)
+      rocks.command(id, session.playerId, {
         id: randomUUID(),
         roundId: view.snapshot.roundId,
         type: "rematch",
-      }),
-    );
+      });
+    assert.equal(rocks.snapshot(id).series?.round, 2);
   } finally {
     for (const service of [moment, zone, shooting, floor, rocks]) service.onModuleDestroy();
   }

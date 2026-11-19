@@ -30,6 +30,7 @@ test("duels use only catalog duel games and limit stakes to 30% of the smaller b
     "number-hunt",
     "double-bluff",
     "firefight",
+    "shell-game",
   ]);
   assert.equal(maxDuelStake(players, "a", "b"), 1500);
   for (const stake of [-1, 0, 1501, 1.5, NaN, Infinity])

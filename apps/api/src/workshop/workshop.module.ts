@@ -11,6 +11,7 @@ import { PackWorkflowService } from "./pack-workflow.service";
 import { PackRatingsController } from "./pack-ratings.controller";
 import { PackRatingsRepository } from "./pack-ratings.repository";
 import { PackRatingsService } from "./pack-ratings.service";
+import { PackCatalogService } from "./pack-catalog.service";
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { PackRatingsService } from "./pack-ratings.service";
     PackWorkflowService,
     PackRatingsRepository,
     PackRatingsService,
+    PackCatalogService,
   ],
   exports: [PacksRepository],
 })

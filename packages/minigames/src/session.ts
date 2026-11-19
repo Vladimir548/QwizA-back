@@ -9,8 +9,10 @@ export type MinigameKind =
   | "falling-floor"
   | "sequence"
   | "rockfall"
+  | "ice-race"
   | "double-bluff"
-  | "firefight";
+  | "firefight"
+  | "shell-game";
 
 export interface MinigamePlayer {
   id: string;
@@ -26,12 +28,34 @@ export interface MinigameSession {
   token: string;
 }
 
+export const MIN_MINIGAME_ROUNDS = 1;
+export const MAX_MINIGAME_ROUNDS = 10;
+export const QUIZ_MINIGAME_ROUNDS = 3;
+
+export function isMinigameRoundCount(value: number) {
+  return Number.isInteger(value) && value >= MIN_MINIGAME_ROUNDS && value <= MAX_MINIGAME_ROUNDS;
+}
+
+export interface MinigameSeries {
+  round: number;
+  roundCount: number;
+  wins: Record<string, number>;
+}
+
+export function isMinigameComplete(snapshot: { phase: string; series?: MinigameSeries }) {
+  return (
+    snapshot.phase === "complete" &&
+    (!snapshot.series || snapshot.series.round === snapshot.series.roundCount)
+  );
+}
+
 export interface MinigameSnapshot {
   id: string;
   code: string;
   revision: number;
   serverTime: number;
   roundId: string;
+  series?: MinigameSeries;
 }
 
 export interface MinigameCommand {

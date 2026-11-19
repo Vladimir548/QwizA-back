@@ -1,11 +1,12 @@
-import { groupMinigames, topicMinigameParticipants } from "@qwiza/minigames";
+import { groupMinigames, TEAM_SELECTION_MS, topicMinigameRoster } from "@qwiza/minigames";
 import type { PrivateRoomState, RoomPack } from "./rooms.types";
 
 export function openTopicMinigameVote(
   state: PrivateRoomState,
   pack: RoomPack,
-  players: { id: string; teamId?: string | null }[],
+  players: { id: string; teamId?: string | null; seatNumber?: number | null }[],
   teams: boolean,
+  now = Date.now(),
 ) {
   if (state.topicMinigamesEnabled === false) return false;
   const topicIndex = pack.topics.findIndex((topic) =>
@@ -19,8 +20,8 @@ export function openTopicMinigameVote(
     !topic.questions.every((q) => state.answeredQuestions?.includes(q.id))
   )
     return false;
-  const participantIds = topicMinigameParticipants(players, teams, topicIndex);
-  const options = groupMinigames(participantIds.length);
+  const roster = topicMinigameRoster(players, teams, now + TEAM_SELECTION_MS);
+  const options = groupMinigames(roster.participantIds.length);
   if (!options.length) return false;
   state.handledTopicIds = [...(state.handledTopicIds ?? []), topic.id];
   state.topicEvent = {
@@ -28,8 +29,7 @@ export function openTopicMinigameVote(
     title: topic.title,
     roundIndex: topic.roundIndex ?? 0,
     prize: topic.questions.reduce((sum, q) => sum + q.value, 0),
-    voterIds: players.map((p) => p.id),
-    participantIds,
+    ...roster,
     options,
     votes: {},
   };
