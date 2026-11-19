@@ -1,6 +1,9 @@
 import { Module } from "@nestjs/common";
+import { HotPotatoService } from "./hot-potato.service";
 import { IceRaceService } from "./ice-race.service";
+import { HotPotatoController } from "./hot-potato.controller";
 import { IceRaceController } from "./ice-race.controller";
+import { HotPotatoGateway } from "./hot-potato.gateway";
 import { IceRaceGateway } from "./ice-race.gateway";
 import { ShellGameService } from "./shell-game.service";
 import { ShellGameController } from "./shell-game.controller";
@@ -44,6 +47,7 @@ import { FallingFloorGateway } from "./falling-floor.gateway";
 
 @Module({
   exports: [
+    HotPotatoService,
     IceRaceService,
     ShellGameService,
     FirefightService,
@@ -60,7 +64,9 @@ import { FallingFloorGateway } from "./falling-floor.gateway";
     NumberHuntService,
   ],
   providers: [
+    HotPotatoService,
     IceRaceService,
+    HotPotatoGateway,
     IceRaceGateway,
     ShellGameService,
     ShellGameGateway,
@@ -90,6 +96,7 @@ import { FallingFloorGateway } from "./falling-floor.gateway";
     FallingFloorGateway,
   ],
   controllers: [
+    HotPotatoController,
     IceRaceController,
     ShellGameController,
     FirefightController,

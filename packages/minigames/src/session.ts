@@ -9,6 +9,7 @@ export type MinigameKind =
   | "falling-floor"
   | "sequence"
   | "rockfall"
+  | "hot-potato"
   | "ice-race"
   | "double-bluff"
   | "firefight"

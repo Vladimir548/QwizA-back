@@ -61,6 +61,7 @@ test("eligibility excludes duels and over-capacity games", () => {
       "firefight",
       "shell-game",
       "ice-race",
+      ...(count <= 6 ? ["hot-potato"] : []),
     ]);
   assert.deepEqual(groupMinigames(13), []);
 });

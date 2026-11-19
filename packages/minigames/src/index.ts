@@ -28,3 +28,5 @@ export * from "./pack-catalog";
 export * from "./team-capacity";
 
 export * from "./shell-game";
+export * from "./hot-potato";
+export * from "./hot-potato-arena";

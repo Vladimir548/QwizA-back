@@ -7,6 +7,7 @@ import { SEQUENCE_MAX_PLAYERS } from "./sequence";
 import { ROCKFALL_MAX_PLAYERS } from "./rockfall";
 import { SHELL_MAX_PLAYERS } from "./shell-game";
 import { FIREFIGHT_MAX_PLAYERS } from "./firefight";
+import { HOT_POTATO_MAX_PLAYERS } from "./hot-potato";
 import { ICE_RACE_MAX_PLAYERS } from "./ice-race";
 
 export type MinigameMode = "duel" | "group";
@@ -56,6 +57,7 @@ export const MINIGAMES = {
     maxPlayers: SHELL_MAX_PLAYERS,
   },
   "ice-race": { title: "Ледяная трасса", mode: "group", maxPlayers: ICE_RACE_MAX_PLAYERS },
+  "hot-potato": { title: "Горячая картошка", mode: "group", maxPlayers: HOT_POTATO_MAX_PLAYERS },
 } as const satisfies Record<MinigameKind, MinigameDefinition>;
 
 type SupportedModes<K extends MinigameKind> = (typeof MINIGAMES)[K] extends {

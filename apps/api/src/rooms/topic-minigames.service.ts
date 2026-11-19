@@ -1,4 +1,5 @@
 import { ShellGameService } from "../minigames/shell-game.service";
+import { HotPotatoService } from "../minigames/hot-potato.service";
 import { IceRaceService } from "../minigames/ice-race.service";
 import { MemoryService } from "../minigames/memory.service";
 import { DoubleBluffService } from "../minigames/double-bluff.service";
@@ -49,8 +50,13 @@ export class TopicMinigamesService {
     @Optional() private readonly firefight?: FirefightService,
     @Optional() private readonly shells?: ShellGameService,
     @Optional() private readonly iceRaces?: IceRaceService,
+    @Optional() private readonly hotPotatoes?: HotPotatoService,
   ) {}
   private service(kind: GroupMinigameKind) {
+    if (kind === "hot-potato") {
+      if (!this.hotPotatoes) throw new Error("Сервис горячей картошки недоступен");
+      return this.hotPotatoes;
+    }
     if (kind === "ice-race") {
       if (!this.iceRaces) throw new Error("Сервис ледяной трассы недоступен");
       return this.iceRaces;
@@ -105,6 +111,8 @@ export class TopicMinigamesService {
 
   private createGroup(kind: GroupMinigameKind, name: string): MinigameSession {
     switch (kind) {
+      case "hot-potato":
+        return this.hotPotatoes!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
       case "ice-race":
         return this.iceRaces!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
       case "shell-game":
