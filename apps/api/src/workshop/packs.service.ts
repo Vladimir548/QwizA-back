@@ -7,7 +7,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { PackDto, QuestionDto } from "./dto/pack.dto";
 import { MediaService } from "./media.service";
-import { PacksRepository } from "./packs.repository";
+import { PacksRepository, samePackContent } from "./packs.repository";
 import type { WorkshopPack, WorkshopQuestion, WorkshopTopic } from "./workshop.model";
 
 @Injectable()
@@ -26,41 +26,74 @@ export class PacksService {
   }
 
   async check(input: PackDto) {
-    const errors: { path: string; message: string }[] = [];
-    const warnings: { path: string; message: string }[] = [];
-    if (!input.title.trim()) errors.push({ path: "Название", message: "Укажи название пака" });
+    type Issue = {
+      path: string;
+      message: string;
+      fieldId?: string;
+      topicId?: string;
+      questionId?: string;
+    };
+    const errors: Issue[] = [];
+    const warnings: Issue[] = [];
+    if (!input.title.trim())
+      errors.push({ path: "Название", fieldId: "pack-title", message: "Укажи название пака" });
     if (!input.description.trim())
       warnings.push({
         path: "Описание",
+        fieldId: "pack-description",
         message: "Добавь описание, чтобы игрокам было проще выбрать пак",
       });
     if (!input.cover)
-      warnings.push({ path: "Обложка", message: "Добавь обложку — она появится в каталоге" });
+      warnings.push({
+        path: "Обложка",
+        fieldId: "pack-cover",
+        message: "Добавь обложку — она появится в каталоге",
+      });
     const rounds = input.rounds ?? ["Раунд 1"];
     if (!rounds.length || rounds.length > 5)
-      errors.push({ path: "Раунды", message: "Добавь от одного до пяти раундов" });
+      errors.push({
+        path: "Раунды",
+        fieldId: "pack-rounds",
+        message: "Добавь от одного до пяти раундов",
+      });
     for (const [index, round] of rounds.entries()) {
       if (!round.trim())
-        errors.push({ path: `Раунд ${index + 1}`, message: "Укажи название раунда" });
+        errors.push({
+          path: `Раунд ${index + 1}`,
+          fieldId: `round-name-${index}`,
+          message: "Укажи название раунда",
+        });
       if (!input.topics.some((topic) => (topic.roundIndex ?? 0) === index))
-        errors.push({ path: `Раунд ${index + 1}`, message: "В раунде нет тем" });
+        errors.push({
+          path: `Раунд ${index + 1}`,
+          fieldId: `round-name-${index}`,
+          message: "В раунде нет тем",
+        });
     }
-    if (!input.topics.length) errors.push({ path: "Темы", message: "Добавь хотя бы одну тему" });
+    if (!input.topics.length)
+      errors.push({ path: "Темы", fieldId: "pack-rounds", message: "Добавь хотя бы одну тему" });
     let questions = 0;
     for (const [index, topic] of input.topics.entries()) {
       const path = `Тема ${index + 1}: ${topic.title}`;
       if ((topic.roundIndex ?? 0) >= rounds.length)
-        errors.push({ path, message: "Тема привязана к несуществующему раунду" });
+        errors.push({
+          path,
+          fieldId: `round-${topic.id}`,
+          message: "Тема привязана к несуществующему раунду",
+        });
       if (
         topic.isFinal &&
         (topic.questions.length !== 1 || !["text", "choice"].includes(topic.questions[0]?.type))
       )
         errors.push({
           path,
+          topicId: topic.id,
           message: "Добавь один текстовый вопрос или вопрос с выбором ответа для финала",
         });
-      if (!topic.title.trim()) errors.push({ path, message: "Укажи название темы" });
-      if (!topic.questions.length) errors.push({ path, message: "В теме нет вопросов" });
+      if (!topic.title.trim())
+        errors.push({ path, fieldId: `topic-${topic.id}`, message: "Укажи название темы" });
+      if (!topic.questions.length)
+        errors.push({ path, topicId: topic.id, message: "В теме нет вопросов" });
       for (const [number, question] of topic.questions.entries()) {
         questions++;
         try {
@@ -78,12 +111,21 @@ export class PacksService {
               throw new BadRequestException("Медиафайл не найден. Загрузи его заново");
         } catch (error) {
           if (!(error instanceof BadRequestException)) throw error;
-          errors.push({ path: `${path} · вопрос ${number + 1}`, message: error.message });
+          errors.push({
+            path: `${path} · вопрос ${number + 1}`,
+            topicId: topic.id,
+            questionId: question.id,
+            message: error.message,
+          });
         }
       }
     }
     if (input.cover && (input.cover.kind !== "image" || !(await this.media.resolve(input.cover))))
-      errors.push({ path: "Обложка", message: "Обложка должна быть загруженным изображением" });
+      errors.push({
+        path: "Обложка",
+        fieldId: "pack-cover",
+        message: "Обложка должна быть загруженным изображением",
+      });
     return {
       valid: errors.length === 0,
       errors,
@@ -126,6 +168,8 @@ export class PacksService {
     author?: WorkshopPack["author"],
     isOfficial = false,
   ) {
+    if (existing && input.revision !== undefined && input.revision !== existing.revision)
+      throw new ConflictException("Пак изменился. Обнови страницу");
     if (!input.title.trim()) throw new BadRequestException("Укажи название пака");
     const rounds = input.rounds ?? ["Раунд 1"];
     if (!rounds.length || rounds.length > 5 || rounds.some((name) => !name.trim()))
@@ -292,7 +336,12 @@ export class PacksService {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    await this.repository.save(pack);
+    if (existing && samePackContent(existing, pack)) return existing;
+    if (existing?.status === "approved" || existing?.status === "pending" || existing?.published) {
+      pack.status = "pending";
+      pack.submittedAt = existing.status === "pending" ? (existing.submittedAt ?? now) : now;
+    }
+    await this.repository.save(pack, existing?.revision);
     return pack;
   }
 

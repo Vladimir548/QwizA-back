@@ -165,7 +165,7 @@ test("a pack can be published and removed from the store", async () => {
       (await packs.update(saved.id, { ...draft(), title: "Новое название" })).published,
       false,
     );
-    assert.equal((await packs.get(saved.id)).status, "draft");
+    assert.equal((await packs.get(saved.id)).status, "pending");
     await packs.setPublished(saved.id, false);
     assert.equal(
       (await packs.store()).some((pack) => pack.id === saved.id),

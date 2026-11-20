@@ -14,6 +14,8 @@ export const ROCKFALL_RADIUS = 0.28;
 export const ROCKFALL_GRAVITY = 18;
 export const ROCKFALL_JUMP_SPEED = 8.2;
 export const ROCKFALL_INPUT_TIMEOUT = 250;
+export const ROCKFALL_WARNING_MS = 650;
+const ROCK_GRAVITY = 4;
 const STEP_MS = 20;
 
 export interface RockfallPlayer extends MinigamePlayer {
@@ -32,6 +34,13 @@ export interface FallingRock {
   radius: number;
   vy: number;
   dropsAt: number;
+}
+/** Server time when the lower edge touches the walkway, also valid after impact. */
+export function rockfallImpactAt(rock: FallingRock, sampleTime: number) {
+  const speedAtImpact = Math.sqrt(
+    Math.max(0, rock.vy ** 2 + 2 * ROCK_GRAVITY * (rock.y - rock.radius)),
+  );
+  return Math.max(sampleTime, rock.dropsAt) + ((rock.vy + speedAtImpact) / ROCK_GRAVITY) * 1000;
 }
 export interface RockfallInput {
   roundId: string;
@@ -60,6 +69,7 @@ export interface RockfallMatch extends Omit<
   simulatedAt: number | null;
   nextRockAt: number | null;
   nextRockId: number;
+  waveNumber: number;
   inputs: Record<string, { dx: number; at: number; jumpSeq: number }>;
   bumps: Record<string, FloorVelocity>;
 }
@@ -81,6 +91,7 @@ export function createRockfallMatch(roundId: string): RockfallMatch {
     simulatedAt: null,
     nextRockAt: null,
     nextRockId: 0,
+    waveNumber: 0,
     inputs: {},
     bumps: {},
   };
@@ -131,17 +142,35 @@ function randomUnit(randomIndex: (upper: number) => number) {
 function spawnRocks(match: RockfallMatch, at: number, randomIndex: (upper: number) => number) {
   const seconds = (at - match.startsAt!) / 1000;
   match.difficulty = 1 + Math.floor(seconds / 15);
-  const count = Math.min(3, 1 + Math.floor(seconds / 30));
-  for (let index = 0; index < count; index++)
+  const beat = match.waveNumber % 6;
+  const sweep = beat === 2 || (seconds >= 45 && beat === 5);
+  const pair = beat === 4 || (seconds >= 30 && beat % 2 === 0);
+  const count = sweep ? (seconds >= 30 ? 4 : 3) : pair ? 2 : 1;
+  // Even the closest pair leaves room for two grounded players between its edges.
+  const spacing = sweep
+    ? 1.35 + 0.4 * randomUnit(randomIndex)
+    : pair
+      ? 2.35 + 0.9 * randomUnit(randomIndex)
+      : 0;
+  const margin = 0.43;
+  const left =
+    margin + randomUnit(randomIndex) * (ROCKFALL_WIDTH - 2 * margin - (count - 1) * spacing);
+  const reverse = (Math.floor(match.waveNumber / 6) + Number(beat === 5)) % 2 === 1;
+  const stagger = sweep ? Math.max(385, 540 - seconds * 2) : 0;
+  const speed = 3.3 + Math.min(4, seconds * 0.045);
+  const radius = 0.23 + randomUnit(randomIndex) * 0.18;
+  for (let index = 0; index < count; index++) {
     match.rocks.push({
       id: ++match.nextRockId,
-      x: 0.4 + randomUnit(randomIndex) * (ROCKFALL_WIDTH - 0.8),
+      x: left + (reverse ? count - index - 1 : index) * spacing,
       y: ROCKFALL_HEIGHT,
-      radius: 0.23 + randomUnit(randomIndex) * 0.18,
-      vy: -(3.3 + Math.min(4, seconds * 0.045)),
-      dropsAt: at + 650,
+      radius,
+      vy: -speed,
+      dropsAt: at + ROCKFALL_WARNING_MS + index * stagger,
     });
-  match.nextRockAt = at + Math.max(240, 1150 - seconds * 13);
+  }
+  match.waveNumber++;
+  match.nextRockAt = at + (count - 1) * stagger + Math.max(440, 1150 - seconds * 13);
 }
 function step(match: RockfallMatch, from: number, to: number) {
   const dt = (to - from) / 1000,
@@ -181,8 +210,8 @@ function step(match: RockfallMatch, from: number, to: number) {
   for (const path of paths) path.player.x = path.endX;
   for (const rock of match.rocks) {
     const moving = Math.max(0, (to - Math.max(from, rock.dropsAt)) / 1000);
-    rock.y += rock.vy * moving - 2 * moving * moving;
-    rock.vy -= 4 * moving;
+    rock.y += rock.vy * moving - (ROCK_GRAVITY / 2) * moving * moving;
+    rock.vy -= ROCK_GRAVITY * moving;
   }
   // Resolve every hit in this step before deciding the winner: simultaneous hits can draw.
   for (const p of match.players)
@@ -191,6 +220,7 @@ function step(match: RockfallMatch, from: number, to: number) {
       match.rocks.some(
         (r) =>
           r.dropsAt <= to &&
+          (r.y >= r.radius || from < rockfallImpactAt(r, to)) &&
           Math.hypot(
             r.x - Math.max(p.x - ROCKFALL_RADIUS, Math.min(p.x + ROCKFALL_RADIUS, r.x)),
             r.y - Math.max(p.y, Math.min(p.y + ROCKFALL_BODY_HEIGHT, r.y)),

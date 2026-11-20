@@ -8,6 +8,11 @@ import {
   advanceRockfall,
   rockfallPresenceChanged,
   rockfallPublicState,
+  rockfallImpactAt,
+  ROCKFALL_WARNING_MS,
+  ROCKFALL_HEIGHT,
+  ROCKFALL_RADIUS,
+  ROCKFALL_WIDTH,
   type RockfallCommand,
 } from "../src/rockfall";
 function fixture(count = 3) {
@@ -128,12 +133,15 @@ test("simultaneous last hits are a draw; public state excludes controls and rema
   for (const p of match.players) send(p.id, "rematch", 5000);
   assert.equal(match.phase, "countdown");
   assert.equal(match.rocks.length, 0);
+  assert.equal(match.waveNumber, 0);
   assert.deepEqual(match.bumps, {});
   assert.ok(match.players.every((p) => p.alive && p.y === 0 && p.jumpSeq === 0));
 });
 test("longer survival increases both rock count and frequency while keeping the active hazard set bounded", () => {
   const { match, start } = fixture(3);
   start();
+  // This seeded collapse stays on the left. Keep observing the spawn cadence for a full minute.
+  match.players.forEach((p, i) => (p.x = 6 + i));
   advanceRockfall(match, 14000, () => 0);
   const first = match.nextRockId;
   advanceRockfall(match, 64000, () => 0);
@@ -142,4 +150,49 @@ test("longer survival increases both rock count and frequency while keeping the 
   assert.ok(match.nextRockId - atMinute > first * 2);
   assert.ok(match.difficulty >= 5);
   assert.ok(match.rocks.length < 100);
+});
+test("the first sweep impacts from left to right and paired rocks leave a passable simultaneous gap", () => {
+  for (const random of [0, 5000, 9999]) {
+    const { match, start } = fixture(3);
+    start();
+    // Sample each freshly scheduled pattern before clock advancement can resolve any hits.
+    for (const beat of [2, 4]) {
+      match.waveNumber = beat;
+      const at = match.nextRockAt!;
+      const last = match.nextRockId;
+      advanceRockfall(match, at + 1, () => random);
+      const rocks = rockfallPublicState(match).rocks.filter((rock) => rock.id > last);
+      assert.equal(rocks.length, beat === 2 ? 3 : 2);
+      assert.equal(rocks[0].dropsAt, at + ROCKFALL_WARNING_MS);
+      for (const rock of rocks) {
+        assert.ok(rock.x >= rock.radius && rock.x + rock.radius <= ROCKFALL_WIDTH);
+        assert.equal(rock.y, ROCKFALL_HEIGHT);
+      }
+      const impacts = rocks.map((r) => rockfallImpactAt(r, at + 1));
+      if (beat === 2) {
+        assert.ok(rocks[0].x < rocks[1].x && rocks[1].x < rocks[2].x);
+        assert.ok(impacts[1] - impacts[0] >= 380 && impacts[2] - impacts[1] >= 380);
+      } else {
+        assert.equal(impacts[0], impacts[1]);
+        assert.ok(
+          rocks[1].x - rocks[0].x - rocks[1].radius - rocks[0].radius > 4 * ROCKFALL_RADIUS,
+        );
+      }
+    }
+  }
+});
+test("the landing time is stable across snapshots and debris on the ground is harmless", () => {
+  const { match, start } = fixture(2);
+  start();
+  match.nextRockAt = null;
+  const rock = { id: 1, x: 2, y: ROCKFALL_HEIGHT, radius: 0.38, vy: -4, dropsAt: 4650 };
+  match.rocks.push(rock);
+  const impact = rockfallImpactAt(rock, 4000);
+  for (const now of [4600, 5000, Math.ceil(impact) + 1]) {
+    advanceRockfall(match, now, () => 0);
+    assert.ok(Math.abs(rockfallImpactAt(rock, now) - impact) < 0.001);
+  }
+  match.players[0].x = rock.x;
+  advanceRockfall(match, Math.ceil(impact) + 21, () => 0);
+  assert.equal(match.players[0].alive, true);
 });

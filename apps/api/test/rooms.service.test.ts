@@ -19,7 +19,7 @@ import {
   teamScoreAdjustment,
 } from "../src/rooms/rooms.service";
 import type { PrivateRoomState, RoomPack, RoomQuestion } from "../src/rooms/rooms.types";
-import { buildTopicPresentation } from "./fixtures/topic-presentation";
+import { buildTopicPresentation } from "../../web/src/features/game/model/topic-presentation";
 
 const question: RoomQuestion = {
   id: "q1",

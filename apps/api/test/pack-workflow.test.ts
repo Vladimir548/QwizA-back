@@ -170,7 +170,7 @@ test("author, cover, validation and versioned admin moderation protect every pub
       workflow.review(pack.id, admin, { revision: stale, decision: "approve" }),
       /изменена/,
     );
-    pack = await workflow.publication(pack.id, true, owner.user);
+    assert.equal(pack.status, "pending");
     pack = await workflow.review(pack.id, admin, { revision: pack.revision!, decision: "approve" });
     assert.equal(pack.status, "approved");
     assert.equal(pack.published, true);
@@ -183,6 +183,38 @@ test("author, cover, validation and versioned admin moderation protect every pub
       workflow.review(pack.id, admin, { revision: pack.revision!, decision: "approve" }),
       /проверена/,
     );
+    const approvedRevision = pack.revision!;
+    const persisted = await packs.get(pack.id);
+    const unchanged = await workflow.update(
+      pack.id,
+      {
+        ...input,
+        title: pack.title + " ",
+        description: pack.description,
+        topics: persisted.topics,
+      },
+      owner.user,
+    );
+    assert.equal(unchanged.revision, approvedRevision);
+    assert.equal(unchanged.status, "approved");
+    const editedTopics = structuredClone(persisted.topics);
+    editedTopics[0].questions[0].promptText += " Ещё подсказка.";
+    pack = await workflow.update(
+      pack.id,
+      { ...input, revision: approvedRevision, topics: editedTopics },
+      owner.user,
+    );
+    assert.equal(pack.status, "pending");
+    assert.equal(pack.published, false);
+    assert.ok((await packs.get(pack.id)).submittedAt);
+    assert.equal(pack.reviewedAt, undefined);
+    assert.ok((await workflow.queue(admin)).some((item) => item.id === pack.id));
+    assert.ok(!(await packs.store()).some((item) => item.id === pack.id));
+    await assert.rejects(
+      workflow.update(pack.id, { ...input, revision: approvedRevision }, owner.user),
+      /изменился/,
+    );
+    pack = await workflow.review(pack.id, admin, { revision: pack.revision!, decision: "approve" });
     assert.ok((await workflow.queue(admin, "approved")).some((item) => item.id === pack.id));
     await assert.rejects(async () => workflow.queue(other.user, "all"), /администратор/);
     await assert.rejects(

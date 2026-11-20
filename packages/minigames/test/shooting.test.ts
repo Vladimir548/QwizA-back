@@ -12,6 +12,7 @@ import {
   applyShootingCursor,
   createShootingMatch,
   shootingPublicState,
+  shootingTargetPose,
   type ShootingCommand,
 } from "../src/shooting";
 
@@ -248,4 +249,34 @@ test("server finishes while players disconnect, ties award each leader once and 
     [1, 1, 0],
   );
   assert.throws(() => send("p0", "shoot", { x: 0.5, y: 0.5, roundId: old }));
+});
+
+test("gallery synchronizes ducks and shutters, and concealed stars cannot be claimed", () => {
+  const { match, start, tick, shoot } = fixture();
+  start();
+  const star = match.targets.find((target) => target.kind === "gold")!;
+  const duck = match.targets.find((target) => target.kind === "bonus")!;
+  assert.equal(star.rail, "rear");
+  assert.equal(duck.rail, "front");
+  const closed = star.spawnedAt + 770;
+  assert.notEqual(shootingTargetPose(duck, closed).x, shootingTargetPose(duck, closed + 300).x);
+  assert.equal(shootingTargetPose(star, closed).opening, 0);
+  tick(closed);
+  shoot("p0", star.id);
+  assert.equal(match.players[0].points, 0);
+  assert.ok(match.targets.includes(star));
+  tick(star.spawnedAt + 1540);
+  shoot("p1", star.id);
+  assert.equal(match.players[1].points, 50);
+});
+
+test("a larger group replenishes the shared gallery sooner", () => {
+  const pair = fixture(2),
+    group = fixture(6);
+  pair.start();
+  group.start();
+  assert.ok(
+    group.match.nextSpawnAt! - group.match.startsAt! <
+      pair.match.nextSpawnAt! - pair.match.startsAt!,
+  );
 });

@@ -194,6 +194,11 @@ export class TopicDto {
 
 export class PackDto {
   @IsOptional()
+  @IsInt()
+  @Min(1)
+  revision?: number;
+
+  @IsOptional()
   @ValidateNested()
   @Type(() => MediaRefDto)
   cover?: MediaRefDto;

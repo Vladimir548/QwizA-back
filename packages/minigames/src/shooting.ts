@@ -30,6 +30,7 @@ export interface ShootingTarget {
   id: string;
   x: number;
   y: number;
+  rail?: "rear" | "front";
   radius: number;
   kind: ShootingTargetKind;
   points: 10 | 25 | 50 | -30;
@@ -116,6 +117,25 @@ export function addShootingPlayer(match: ShootingMatch, id: string, name: string
   });
   for (const player of match.players) player.ready = false;
 }
+const railPositions = [0.155, 0.385, 0.615, 0.845];
+const openingTargets = ["gold", "normal", "normal", "normal", "bonus", "bonus", "trap"] as const;
+
+export function shootingTargetPose(target: ShootingTarget, now: number) {
+  const elapsed = Math.max(0, now - target.spawnedAt);
+  const x =
+    target.kind === "bonus" && target.rail ? target.x + 0.065 * Math.sin(now / 490) : target.x;
+  // The two shutters meet in the middle, pause, then retract together.
+  const opening =
+    target.kind === "gold" && target.rail
+      ? Math.max(0, Math.min(1, 0.55 + 0.9 * Math.cos(elapsed / 245)))
+      : 1;
+  return { x, opening, exposed: opening >= 0.45 };
+}
+
+function spawnDelay(match: ShootingMatch) {
+  return Math.max(180, 520 - 65 * (match.players.filter((player) => player.connected).length - 2));
+}
+
 function spawn(
   match: ShootingMatch,
   now: number,
@@ -123,36 +143,31 @@ function spawn(
   idFactory: IdFactory,
   forcedKind?: ShootingTargetKind,
 ) {
-  if (match.targets.length >= 8) return;
+  const free = (rail: "rear" | "front") =>
+    railPositions.filter(
+      (x) => !match.targets.some((target) => target.rail === rail && target.x === x),
+    );
+  const rear = free("rear"),
+    front = free("front");
+  if (!rear.length && !front.length) return;
   const roll = random(randomIndex, 100);
-  const kind =
-    forcedKind ?? (roll < 55 ? "normal" : roll < 80 ? "bonus" : roll < 90 ? "gold" : "trap");
-  const { radius, points } = specifications[kind];
-  const minY = (radius + 0.01) / SHOOTING_ARENA_HEIGHT_RATIO;
-  const maxY = 1 - (radius + 0.03) / SHOOTING_ARENA_HEIGHT_RATIO;
-  for (let attempt = 0; attempt < 60; attempt++) {
-    const x = 0.09 + random(randomIndex, 8201) / 10000;
-    const y = minY + (random(randomIndex, 10001) / 10000) * (maxY - minY);
-    if (
-      match.targets.some(
-        (target) =>
-          Math.hypot(x - target.x, (y - target.y) * SHOOTING_ARENA_HEIGHT_RATIO) <
-          Math.max(radius + target.radius + 0.025, 0.14),
-      )
-    )
-      continue;
-    match.targets.push({
-      id: idFactory(),
-      x,
-      y,
-      radius,
-      kind,
-      points,
-      spawnedAt: now,
-      expiresAt: Math.min(match.endsAt!, now + 1800 + random(randomIndex, 1701)),
-    });
-    return;
-  }
+  let kind =
+    forcedKind ?? (roll < 48 ? "normal" : roll < 78 ? "bonus" : roll < 90 ? "gold" : "trap");
+  if (kind === "gold" && match.targets.some((target) => target.kind === "gold")) kind = "normal";
+  if (!rear.length && (kind === "gold" || kind === "normal")) kind = "bonus";
+  if (!front.length && (kind === "bonus" || kind === "trap")) kind = "normal";
+  const rail = kind === "normal" || kind === "gold" ? "rear" : "front";
+  const slots = rail === "rear" ? rear : front;
+  match.targets.push({
+    id: idFactory(),
+    kind,
+    rail,
+    x: slots[random(randomIndex, slots.length)],
+    y: rail === "rear" ? 0.32 : 0.73,
+    ...specifications[kind],
+    spawnedAt: now,
+    expiresAt: Math.min(match.endsAt!, now + 1800 + random(randomIndex, 1701)),
+  });
 }
 function finish(match: ShootingMatch) {
   const maximum = Math.max(...match.players.map((p) => p.points));
@@ -183,24 +198,8 @@ export function advanceShooting(
     if (now < match.startsAt!) return;
     match.phase = "running";
     if (now < match.endsAt!) {
-      let best: ShootingTarget[] = [];
-      for (let attempt = 0; attempt < 8; attempt++) {
-        match.targets = [];
-        for (const kind of [
-          "normal",
-          "bonus",
-          "gold",
-          "trap",
-          "normal",
-          "normal",
-          "bonus",
-        ] as const)
-          spawn(match, now, randomIndex, idFactory, kind);
-        if (match.targets.length > best.length) best = match.targets;
-        if (best.length === 7) break;
-      }
-      match.targets = best;
-      match.nextSpawnAt = now + 500;
+      for (const kind of openingTargets) spawn(match, now, randomIndex, idFactory, kind);
+      match.nextSpawnAt = now + spawnDelay(match);
     }
   }
   if (match.phase !== "running") return;
@@ -212,7 +211,7 @@ export function advanceShooting(
   match.effects = match.effects.filter((effect) => now - effect.at < 1200).slice(-24);
   if (match.nextSpawnAt !== null && now >= match.nextSpawnAt) {
     spawn(match, now, randomIndex, idFactory);
-    match.nextSpawnAt = now + 500;
+    match.nextSpawnAt = now + spawnDelay(match);
   }
 }
 export function applyShootingCommand(
@@ -236,7 +235,10 @@ export function applyShootingCommand(
       throw new Error("Слишком частые выстрелы.");
     player.lastShotAt = now;
     player.shots++;
-    const target = match.targets.find((candidate) => candidate.id === command.targetId);
+    const target = match.targets.find(
+      (candidate) =>
+        candidate.id === command.targetId && shootingTargetPose(candidate, now).exposed,
+    );
     const points = target?.points ?? 0;
     if (target) {
       match.targets = match.targets.filter((candidate) => candidate.id !== target.id);
@@ -248,8 +250,8 @@ export function applyShootingCommand(
       id: idFactory(),
       targetId: target?.id ?? null,
       playerId,
-      x: target?.x ?? command.x,
-      y: target?.y ?? command.y,
+      x: command.x,
+      y: command.y,
       points,
       at: now,
     });

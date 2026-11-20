@@ -29,6 +29,7 @@ export interface MinigameSession {
   token: string;
 }
 
+export const MAX_MINIGAME_NAME_LENGTH = 40;
 export const MIN_MINIGAME_ROUNDS = 1;
 export const MAX_MINIGAME_ROUNDS = 10;
 export const QUIZ_MINIGAME_ROUNDS = 3;

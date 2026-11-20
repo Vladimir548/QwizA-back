@@ -7,6 +7,7 @@ import {
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   isMinigameRoundCount,
+  MAX_MINIGAME_NAME_LENGTH,
   type MinigamePlayer,
   type MinigameSession,
   type MinigameCommand,
@@ -96,7 +97,8 @@ export abstract class MinigameRooms<
   private reserve(room: GameRoom<Match>, displayName: string): MinigameSession {
     if (room.sealed) throw new BadRequestException("Участники испытания уже определены.");
     const name = displayName.trim();
-    if (!name || name.length > 24) throw new BadRequestException("Введи имя от 1 до 24 символов.");
+    if (!name || name.length > MAX_MINIGAME_NAME_LENGTH)
+      throw new BadRequestException(`Введи имя от 1 до ${MAX_MINIGAME_NAME_LENGTH} символов.`);
     const playerId = randomUUID();
     const token = randomBytes(32).toString("hex");
     try {

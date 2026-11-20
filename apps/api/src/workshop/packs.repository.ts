@@ -1,4 +1,5 @@
-import { Injectable } from "@nestjs/common";
+import { isDeepStrictEqual } from "node:util";
+import { ConflictException, Injectable } from "@nestjs/common";
 import { BUILTIN_PACK_IDS, type BuiltinPackId } from "@qwiza/minigames";
 import { Prisma } from "../generated/prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
@@ -217,6 +218,16 @@ function nestedTopics(pack: WorkshopPack) {
   }));
 }
 
+export function samePackContent(first: WorkshopPack, second: WorkshopPack) {
+  return (
+    first.title === second.title &&
+    first.description === second.description &&
+    first.cover?.id === second.cover?.id &&
+    isDeepStrictEqual(first.rounds, second.rounds) &&
+    isDeepStrictEqual(nestedTopics(first), nestedTopics(second))
+  );
+}
+
 @Injectable()
 export class PacksRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -273,16 +284,11 @@ export class PacksRepository {
     return record ? toWorkshopPack(record) : undefined;
   }
 
-  async save(pack: WorkshopPack): Promise<void> {
+  async save(pack: WorkshopPack, expectedRevision?: number): Promise<void> {
     await this.prisma.$transaction(async (transaction) => {
-      const exists = await transaction.pack.findUnique({
-        where: { id: pack.id },
-        select: { id: true },
-      });
-      if (exists) {
-        await transaction.topic.deleteMany({ where: { packId: pack.id } });
-        await transaction.pack.update({
-          where: { id: pack.id },
+      if (expectedRevision !== undefined) {
+        const updated = await transaction.pack.updateMany({
+          where: { id: pack.id, revision: expectedRevision },
           data: {
             title: pack.title,
             description: pack.description,
@@ -292,14 +298,19 @@ export class PacksRepository {
             authorId: pack.author?.id,
             isOfficial: pack.isOfficial ?? false,
             coverId: pack.cover?.id ?? null,
-            submittedAt: null,
+            submittedAt: pack.submittedAt ? new Date(pack.submittedAt) : null,
             reviewedAt: null,
             reviewedById: null,
             rejectionReason: null,
             rounds: pack.rounds,
             updatedAt: new Date(pack.updatedAt),
-            topics: { create: nestedTopics(pack) },
           },
+        });
+        if (!updated.count) throw new ConflictException("Пак изменился. Обнови страницу");
+        await transaction.topic.deleteMany({ where: { packId: pack.id } });
+        await transaction.pack.update({
+          where: { id: pack.id },
+          data: { topics: { create: nestedTopics(pack) }, updatedAt: new Date(pack.updatedAt) },
         });
       } else {
         await transaction.pack.create({

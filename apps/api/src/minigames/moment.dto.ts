@@ -1,8 +1,12 @@
-import { MAX_MINIGAME_ROUNDS, MIN_MINIGAME_ROUNDS } from "@qwiza/minigames";
+import {
+  MAX_MINIGAME_NAME_LENGTH,
+  MAX_MINIGAME_ROUNDS,
+  MIN_MINIGAME_ROUNDS,
+} from "@qwiza/minigames";
 import { IsInt, IsString, Length, Max, Min, ValidateIf } from "class-validator";
 
 export class JoinMinigameDto {
-  @IsString() @Length(1, 24) displayName!: string;
+  @IsString() @Length(1, MAX_MINIGAME_NAME_LENGTH) displayName!: string;
 }
 
 export class CreateMinigameDto extends JoinMinigameDto {
