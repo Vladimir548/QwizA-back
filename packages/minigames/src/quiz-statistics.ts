@@ -79,14 +79,28 @@ export function captureQuizStatistics(
   const byId = Object.fromEntries(
     Object.entries(previous.byId).map(([id, stats]) => [id, { ...stats }]),
   );
+  const question = event.question;
+  const newQuestion = question && !previous.questions.includes(question.id);
+  const teamQuestionPoints = new Map<string, { earned: number; lost: number }>();
+  if (newQuestion && !event.manual) {
+    for (const { id, teamId, score } of after) {
+      if (!teamId) continue;
+      const delta = score - (oldScores[id] ?? score);
+      const points = teamQuestionPoints.get(teamId) ?? { earned: 0, lost: 0 };
+      points.earned += Math.max(0, delta);
+      points.lost += Math.max(0, -delta);
+      teamQuestionPoints.set(teamId, points);
+    }
+  }
   for (const [id, score] of Object.entries(scores)) {
     const oldScore = oldScores[id] ?? score;
     const stats = (byId[id] ??= emptyQuizPlayerStats(oldScore));
     const delta = score - oldScore;
     if (event.manual) stats.adjustments += delta;
     else {
-      stats.earned += Math.max(0, delta);
-      stats.lost += Math.max(0, -delta);
+      const points = teamQuestionPoints.get(id);
+      stats.earned += points?.earned ?? Math.max(0, delta);
+      stats.lost += points?.lost ?? Math.max(0, -delta);
     }
     stats.peak = Math.max(stats.peak, oldScore, score);
   }
@@ -94,8 +108,6 @@ export function captureQuizStatistics(
     const player = after.find((p) => p.id === id);
     return player ? [id, ...(player.teamId ? [player.teamId] : [])] : [];
   };
-  const question = event.question;
-  const newQuestion = question && !previous.questions.includes(question.id);
   if (newQuestion) {
     const results = new Map<string, { answered: boolean; correct: boolean }>();
     for (const answer of question.answers) {

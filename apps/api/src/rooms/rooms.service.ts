@@ -1146,12 +1146,18 @@ export class RoomsService implements OnModuleInit {
         response.correct = true;
         const doubled = state.activePowers?.[response.participantId]?.double;
         response.scoreDelta = question.value * (doubled ? 2 : 1);
+        response.scorePending = true;
+      }
+    }
+    for (const response of state.responses) {
+      if (!response.scorePending) continue;
+      if (response.scoreDelta)
         await tx.gameParticipant.update({
           where: { id: response.participantId },
           data: { score: { increment: response.scoreDelta } },
         });
-        rewardCorrectAnswer(state, response);
-      }
+      rewardCorrectAnswer(state, response);
+      delete response.scorePending;
     }
     state.pickerId =
       (state.hostEnabled ? state.lastJudgedCorrectId : undefined) ??
@@ -1430,8 +1436,7 @@ export class RoomsService implements OnModuleInit {
       const canControl = participant.role === "host" || participant.id === room.creatorId;
       let error: string | undefined;
       let queued = false;
-      let delta = 0;
-      let judgedScore: { participantId: string; delta: number } | undefined;
+      let scoreIncrement: { participantId: string; delta: number } | undefined;
       let scoreUpdate: { participantId: string; score: number } | undefined;
       let seatUpdate:
         { role: "host" | "player"; teamId: string | null; seatNumber: number | null } | undefined;
@@ -2008,7 +2013,7 @@ export class RoomsService implements OnModuleInit {
                 : correct
                   ? price
                   : 0;
-          delta =
+          const delta =
             state.hostEnabled || question.type === "numeric-closest"
               ? 0
               : earned > 0
@@ -2026,7 +2031,14 @@ export class RoomsService implements OnModuleInit {
             distanceKm: measuredDistance,
             distancePercent: measuredPercent,
           };
-          if (!state.hostEnabled) rewardCorrectAnswer(state, response);
+          if (!state.hostEnabled) {
+            if (question.answerMode === "everyone") {
+              if (question.type !== "numeric-closest") response.scorePending = true;
+            } else {
+              scoreIncrement = { participantId, delta };
+              rewardCorrectAnswer(state, response);
+            }
+          }
           state.responses.push(response);
           if (
             question.answerMode === "buzzer" ||
@@ -2112,20 +2124,23 @@ export class RoomsService implements OnModuleInit {
           if (correct) state.lastJudgedCorrectId = response.participantId;
           response.scoreDelta = hostJudgedDelta(question, correct, multiplier, active);
           response.shielded = !correct && Boolean(active?.shield);
-          judgedScore = { participantId: response.participantId, delta: response.scoreDelta };
-          rewardCorrectAnswer(state, response);
           if (question.answerMode === "buzzer") {
+            scoreIncrement = { participantId: response.participantId, delta: response.scoreDelta };
+            rewardCorrectAnswer(state, response);
             if (correct || !resumeBuzzer(state, room.participants, now))
               await this.finish(tx, state, question, now, room.participants);
-          } else if (
-            state.responses.every((item) => item.judged) &&
-            room.participants
-              .filter((item) => item.role === "player")
-              .every((item) =>
-                state.responses.some((response) => response.participantId === item.id),
-              )
-          )
-            await this.finish(tx, state, question, now, room.participants);
+          } else {
+            response.scorePending = true;
+            if (
+              state.responses.every((item) => item.judged) &&
+              room.participants
+                .filter((item) => item.role === "player")
+                .every((item) =>
+                  state.responses.some((response) => response.participantId === item.id),
+                )
+            )
+              await this.finish(tx, state, question, now, room.participants);
+          }
         }
       } else if (input.type === "next") {
         if (!canControl) error = "Только создатель или ведущий завершает вопрос";
@@ -2209,15 +2224,10 @@ export class RoomsService implements OnModuleInit {
             where: { id: scoreUpdate.participantId },
             data: { score: scoreUpdate.score },
           });
-        if (delta)
+        if (scoreIncrement?.delta)
           await tx.gameParticipant.update({
-            where: { id: participantId },
-            data: { score: { increment: delta } },
-          });
-        if (judgedScore?.delta)
-          await tx.gameParticipant.update({
-            where: { id: judgedScore.participantId },
-            data: { score: { increment: judgedScore.delta } },
+            where: { id: scoreIncrement.participantId },
+            data: { score: { increment: scoreIncrement.delta } },
           });
         await this.saveState(tx, room, state, input.type);
         wakeup = this.nextWakeup(state);

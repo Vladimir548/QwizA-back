@@ -116,6 +116,11 @@ for (const gameMode of ["solo", "team"] as const)
         };
         assert.equal((await command(host.participantId, input, cmdId)).ok, true);
         assert.equal((await command(host.participantId, input, cmdId)).ok, true);
+        if (person !== fourth) {
+          const pending = await rooms.publicSnapshot(id);
+          assert.ok(pending.participants.every((player) => player.score === 0));
+          assert.equal(pending.result, undefined);
+        }
       }
       let snapshot = await rooms.publicSnapshot(id);
       assert.equal(snapshot.statistics.byId[first.participantId].answered, 1);
@@ -126,6 +131,7 @@ for (const gameMode of ["solo", "team"] as const)
       if (gameMode === "team") {
         assert.equal(snapshot.statistics.byId[target].answered, 1);
         assert.equal(snapshot.statistics.byId[target].correct, 1);
+        assert.equal(snapshot.statistics.byId[target].lost, 100);
       }
       assert.equal(
         (
@@ -148,6 +154,92 @@ for (const gameMode of ["solo", "team"] as const)
       assert.doesNotMatch(JSON.stringify(snapshot.summary), /tokenHash|userId|passwordHash/);
       assert.deepEqual(snapshot.summary?.rules.criteria, victory.criteria);
       assert.equal(snapshot.summary?.standings[0].id, target);
+    } finally {
+      if (id) await prisma.gameRoom.delete({ where: { id } });
+      await prisma.$disconnect();
+    }
+  });
+
+for (const finishBy of ["last-answer", "timeout"] as const)
+  test(`online shared answers settle once on ${finishBy}`, async () => {
+    const url = process.env.TEST_DATABASE_URL;
+    if (!url) throw new Error("TEST_DATABASE_URL required");
+    const prisma = new PrismaService(new ConfigService({ DATABASE_URL: url }));
+    await prisma.$connect();
+    const rooms = new RoomsService(prisma, new PacksRepository(prisma));
+    let id: string | undefined;
+    try {
+      const first = await rooms.create({
+        name: "Общий вопрос",
+        displayName: "Первый",
+        gameMode: "solo",
+        maxPlayers: 2,
+        hostEnabled: false,
+      });
+      id = first.roomId;
+      const second = await rooms.join(id, { displayName: "Второй" });
+      const room = await prisma.gameRoom.findUniqueOrThrow({ where: { id } });
+      const pack = room.pack as unknown as RoomPack;
+      const question = {
+        ...pack.topics[0].questions[0],
+        id: "shared-choice",
+        type: "choice" as const,
+        answerMode: "everyone" as const,
+        value: 100,
+        options: ["Да", "Нет"],
+        answer: "Да",
+      };
+      pack.topics = [{ ...pack.topics[0], questions: [question] }];
+      const state = {
+        ...(room.state as unknown as PrivateRoomState),
+        phase: "question" as const,
+        currentQuestionId: question.id,
+        played: [question.id],
+        buzzOpensAt: Date.now() - 1,
+        deadlineAt: Date.now() + 60000,
+      };
+      await prisma.gameRoom.update({
+        where: { id },
+        data: {
+          pack: pack as unknown as Prisma.InputJsonValue,
+          state: state as unknown as Prisma.InputJsonValue,
+        },
+      });
+
+      const sign = finishBy === "timeout" ? 1 : -1;
+      const firstAnswer = { id: randomUUID(), type: "answer" as const, answer: sign === 1 ? 0 : 1 };
+      assert.equal((await rooms.command(id, first.participantId, firstAnswer)).ok, true);
+      const pending = await rooms.publicSnapshot(id);
+      assert.equal(pending.phase, "question");
+      assert.deepEqual(pending.answeredPlayerIds, [first.participantId]);
+      assert.ok(pending.participants.every((player) => player.score === 0));
+      assert.equal(pending.result, undefined);
+
+      if (finishBy === "timeout") {
+        const pendingRoom = await prisma.gameRoom.findUniqueOrThrow({ where: { id } });
+        await prisma.gameRoom.update({
+          where: { id },
+          data: {
+            state: { ...(pendingRoom.state as Prisma.JsonObject), deadlineAt: Date.now() - 1 },
+          },
+        });
+        await rooms.advance(id);
+      } else {
+        const lastAnswer = { id: randomUUID(), type: "answer" as const, answer: 0 };
+        assert.equal((await rooms.command(id, second.participantId, lastAnswer)).ok, true);
+        assert.equal((await rooms.command(id, second.participantId, lastAnswer)).ok, true);
+      }
+      await rooms.advance(id);
+      const result = await rooms.publicSnapshot(id);
+      assert.equal(result.phase, "result");
+      assert.equal(
+        result.participants.find((player) => player.id === first.participantId)?.score,
+        sign * 100,
+      );
+      assert.equal(
+        result.participants.find((player) => player.id === second.participantId)?.score,
+        finishBy === "timeout" ? 0 : 100,
+      );
     } finally {
       if (id) await prisma.gameRoom.delete({ where: { id } });
       await prisma.$disconnect();

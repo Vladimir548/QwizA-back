@@ -94,6 +94,7 @@ export interface RoomResponse {
     | { x: number; y: number }[];
   correct: boolean;
   scoreDelta: number;
+  scorePending?: true;
   judged?: boolean;
   verbal?: boolean;
   shielded?: boolean;

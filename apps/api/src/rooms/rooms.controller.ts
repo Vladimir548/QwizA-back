@@ -15,7 +15,6 @@ import { PacksRepository } from "../workshop/packs.repository";
 import { canViewPack } from "../workshop/pack-access";
 import { CreateRoomDto, JoinRoomDto } from "./rooms.dto";
 import { RoomsService } from "./rooms.service";
-import { requireTeamModeAccess } from "./team-mode-access";
 
 @Controller("rooms")
 export class RoomsController {
@@ -27,13 +26,11 @@ export class RoomsController {
 
   @Post()
   async create(@Body() input: CreateRoomDto, @Req() request: Request) {
-    const user =
-      input.packId || input.gameMode === "team"
-        ? await this.sessions.user(cookieToken(request))
-        : null;
-    requireTeamModeAccess(input.gameMode, user);
     if (input.packId) {
-      const pack = await this.packs.find(input.packId);
+      const [pack, user] = await Promise.all([
+        this.packs.find(input.packId),
+        this.sessions.user(cookieToken(request)),
+      ]);
       if (!pack || !canViewPack(pack, user))
         throw new NotFoundException("Пак не опубликован или недоступен");
     }
@@ -41,14 +38,7 @@ export class RoomsController {
   }
 
   @Post(":roomId/join")
-  async join(
-    @Param("roomId", ParseUUIDPipe) roomId: string,
-    @Body() input: JoinRoomDto,
-    @Req() request: Request,
-  ) {
-    const preview = await this.rooms.preview(roomId);
-    if (preview.gameMode === "team")
-      requireTeamModeAccess(preview.gameMode, await this.sessions.user(cookieToken(request)));
+  join(@Param("roomId", ParseUUIDPipe) roomId: string, @Body() input: JoinRoomDto) {
     return this.rooms.join(roomId, input);
   }
 

@@ -1,5 +1,4 @@
 import { publicUser, SessionService } from "./session.service";
-import { requireTeamModeAccess } from "../rooms/team-mode-access";
 import { ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import argon2 from "argon2";
@@ -116,10 +115,9 @@ export class AuthService {
     const participant = await this.prisma.gameParticipant.findFirst({
       where: { roomId, userId: user.id },
       orderBy: { joinedAt: "asc" },
-      include: { room: { select: { gameMode: true } } },
+      select: { id: true },
     });
     if (!participant) throw new UnauthorizedException("У тебя нет места в этой комнате");
-    requireTeamModeAccess(participant.room.gameMode, user);
     const token = randomBytes(32).toString("base64url");
     await this.prisma.gameParticipant.update({
       where: { id: participant.id },

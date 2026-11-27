@@ -11,9 +11,8 @@ import { PrismaService } from "../src/prisma/prisma.service";
 import { RoomsService } from "../src/rooms/rooms.service";
 import { RoomsController } from "../src/rooms/rooms.controller";
 import { PacksRepository } from "../src/workshop/packs.repository";
-import { requireTeamModeAccess } from "../src/rooms/team-mode-access";
 
-test("team preview requires the current account admin role for create, join and rejoin", async () => {
+test("guests and ordinary accounts can create, join and start team games", async () => {
   const databaseUrl = process.env.TEST_DATABASE_URL;
   if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
   const prisma = new PrismaService(new ConfigService({ DATABASE_URL: databaseUrl }));
@@ -26,8 +25,8 @@ test("team preview requires the current account admin role for create, join and 
   );
   const auth = new AuthService(prisma, rooms, sessions);
   const controller = new RoomsController(rooms, sessions, packs);
-  const accountIds: string[] = [],
-    roomIds: string[] = [];
+  const roomIds: string[] = [];
+  let accountId: string | undefined;
   const request = (token?: string) =>
     ({ headers: { cookie: token ? `qwesto_session=${token}` : undefined } }) as Request;
   try {
@@ -35,25 +34,19 @@ test("team preview requires the current account admin role for create, join and 
       password: randomUUID(),
       nickname: `Игрок-${randomUUID().slice(0, 8)}`,
     });
-    accountIds.push(regular.user.id);
-    const developer = await auth.register({
-      password: randomUUID(),
-      nickname: `Разработчик-${randomUUID().slice(0, 8)}`,
-    });
-    accountIds.push(developer.user.id);
-    await prisma.userAccount.update({ where: { id: developer.user.id }, data: { role: "admin" } });
+    accountId = regular.user.id;
+    assert.equal(regular.user.role, "user");
     const input = {
-      name: "Предпросмотр команд",
+      name: "Командная игра",
       gameMode: "team" as const,
       maxPlayers: 4,
-      displayName: "Разработчик",
+      displayName: "Создатель",
     };
-    for (const denied of [request(), request(regular.token), request("a".repeat(44))])
-      await assert.rejects(controller.create(input, denied), /Командная игра в разработке/);
-    const created = await controller.create(input, request(developer.token));
+    const created = await controller.create(input, request());
     roomIds.push(created.roomId);
+    assert.equal(created.snapshot.gameMode, "team");
     await assert.rejects(
-      controller.create({ ...input, teamCount: 4, maxPlayers: 12 }, request(developer.token)),
+      controller.create({ ...input, teamCount: 4, maxPlayers: 12 }, request()),
       /Для четырёх команд нужно по два игрока/,
     );
     for (const [teamCount, maxPlayers] of [
@@ -62,54 +55,37 @@ test("team preview requires the current account admin role for create, join and 
     ]) {
       const teamRoom = await controller.create(
         { ...input, teamCount, maxPlayers, hostEnabled: true },
-        request(developer.token),
+        request(regular.token),
       );
       roomIds.push(teamRoom.roomId);
       assert.equal(teamRoom.snapshot.teamCount, teamCount);
       assert.equal(teamRoom.snapshot.maxPlayers, maxPlayers);
     }
-    for (const denied of [request(), request(regular.token)])
-      await assert.rejects(
-        controller.join(created.roomId, { displayName: "Игрок" }, denied),
-        /Командная игра в разработке/,
-      );
-    await controller.join(
-      created.roomId,
-      { displayName: "Разработчик 2" },
-      request(developer.token),
-    );
-    await auth.claimRoom(developer.token, created.roomId, created.token);
-    assert.equal((await auth.rejoinRoom(developer.token, created.roomId)).roomId, created.roomId);
-    // A pre-existing team membership must not grant a regular account new credentials.
-    const legacySeat = await rooms.join(created.roomId, { displayName: "Старое место" });
-    await auth.claimRoom(regular.token, created.roomId, legacySeat.token);
+    const joined = await controller.join(created.roomId, {
+      displayName: "Игрок с аккаунтом",
+      teamNumber: 2,
+    });
+    await auth.claimRoom(regular.token, created.roomId, joined.token);
+    const recovered = await auth.rejoinRoom(regular.token, created.roomId);
+    assert.equal(recovered.participantId, joined.participantId);
+    assert.notEqual(recovered.token, joined.token);
+    const player = await rooms.authenticate(created.roomId, recovered.token);
+    assert.equal(player.teamId, "team-2");
+
+    await controller.join(created.roomId, { displayName: "Гость 1", teamNumber: 1 });
     await assert.rejects(
-      auth.rejoinRoom(regular.token, created.roomId),
-      /Командная игра в разработке/,
+      controller.join(created.roomId, { displayName: "Нет места", teamNumber: 1 }),
+      /нет свободных мест/,
     );
-    await prisma.userAccount.update({ where: { id: developer.user.id }, data: { role: "user" } });
-    await assert.rejects(
-      controller.create(input, request(developer.token)),
-      /Командная игра в разработке/,
-    );
-    await assert.rejects(
-      controller.join(created.roomId, { displayName: "Нет доступа" }, request(developer.token)),
-      /Командная игра в разработке/,
-    );
-    await assert.rejects(
-      auth.rejoinRoom(developer.token, created.roomId),
-      /Командная игра в разработке/,
-    );
-    const solo = await controller.create({ ...input, gameMode: "solo", maxPlayers: 2 }, request());
-    roomIds.push(solo.roomId);
-    assert.equal(
-      (await controller.join(solo.roomId, { displayName: "Гость" }, request())).roomId,
-      solo.roomId,
-    );
-    assert.doesNotThrow(() => requireTeamModeAccess("solo", null));
+    await controller.join(created.roomId, { displayName: "Гость 2", teamNumber: 2 });
+    const start = { id: randomUUID(), type: "start" as const };
+    assert.equal((await rooms.command(created.roomId, joined.participantId, start)).ok, false);
+    assert.equal((await rooms.command(created.roomId, created.participantId, start)).ok, true);
+    const started = await controller.preview(created.roomId);
+    assert.ok(started.phase === "loading" || started.phase === "presentation");
   } finally {
     await prisma.gameRoom.deleteMany({ where: { id: { in: roomIds } } });
-    await prisma.userAccount.deleteMany({ where: { id: { in: accountIds } } });
+    if (accountId) await prisma.userAccount.delete({ where: { id: accountId } });
     await prisma.$disconnect();
   }
 });
