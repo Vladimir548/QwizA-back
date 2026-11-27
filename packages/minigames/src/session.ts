@@ -13,7 +13,8 @@ export type MinigameKind =
   | "ice-race"
   | "double-bluff"
   | "firefight"
-  | "shell-game";
+  | "shell-game"
+  | "odd-even";
 
 export interface MinigamePlayer {
   id: string;

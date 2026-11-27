@@ -10,6 +10,8 @@ import { FIREFIGHT_MAX_PLAYERS } from "./firefight";
 import { HOT_POTATO_MAX_PLAYERS } from "./hot-potato";
 import { ICE_RACE_MAX_PLAYERS } from "./ice-race";
 
+import { ODD_EVEN_MAX_PLAYERS } from "./odd-even";
+
 export type MinigameMode = "duel" | "group";
 
 export interface MinigameDefinition {
@@ -58,6 +60,12 @@ export const MINIGAMES = {
   },
   "ice-race": { title: "Ледяная трасса", mode: "group", maxPlayers: ICE_RACE_MAX_PLAYERS },
   "hot-potato": { title: "Горячая картошка", mode: "group", maxPlayers: HOT_POTATO_MAX_PLAYERS },
+  "odd-even": {
+    title: "Чёт или нечёт",
+    mode: "group",
+    formats: ["duel", "group"],
+    maxPlayers: ODD_EVEN_MAX_PLAYERS,
+  },
 } as const satisfies Record<MinigameKind, MinigameDefinition>;
 
 type SupportedModes<K extends MinigameKind> = (typeof MINIGAMES)[K] extends {

@@ -15,9 +15,12 @@ import { canUseBuiltinMedia, playerMediaIdentity } from "@qwiza/minigames";
 import { LivekitService } from "./livekit.service";
 import { RoomsService } from "./rooms.service";
 import { cookieToken, SessionService } from "../auth/session.service";
+import { MinigameRoomAccess } from "../minigames/minigame-room-access";
 
 interface MediaSocketData {
   roomId: string;
+  mediaRoomId: string;
+  minigame?: string;
   participantId: string;
   userId: string | null;
   sessionToken?: string;
@@ -38,26 +41,31 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
     private readonly rooms: RoomsService,
     private readonly sessions: SessionService,
     private readonly livekit: LivekitService,
+    private readonly minigameRooms: MinigameRoomAccess,
   ) {}
 
   afterInit(server: Namespace) {
     server.use((socket, next) => {
-      const { roomId, token } = socket.handshake.auth as Record<string, unknown>;
-      if (typeof roomId !== "string" || typeof token !== "string")
+      const { roomId, token, minigame } = socket.handshake.auth as Record<string, unknown>;
+      if (
+        typeof roomId !== "string" ||
+        typeof token !== "string" ||
+        (minigame !== undefined && typeof minigame !== "string")
+      )
         return next(new Error("Нужен ключ участника"));
-      void this.rooms
-        .authenticate(roomId, token)
+      void this.authenticate(roomId, token, minigame)
         .then(async (participant) => {
           const sessionToken = cookieToken({ headers: socket.handshake.headers });
           const user = await this.sessions.user(sessionToken);
+          const userId = minigame === undefined ? participant.userId : (user?.id ?? null);
           socket.data = {
             roomId,
+            mediaRoomId: minigame === undefined ? roomId : `minigame-${minigame}-${roomId}`,
+            minigame,
             participantId: participant.id,
-            userId: participant.userId,
+            userId,
             sessionToken,
-            canBroadcast: Boolean(
-              user && user.id === participant.userId && canUseBuiltinMedia(user),
-            ),
+            canBroadcast: Boolean(user && user.id === userId && canUseBuiltinMedia(user)),
           } satisfies MediaSocketData;
           next();
         })
@@ -65,8 +73,13 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
     });
   }
 
+  private async authenticate(roomId: string, token: string, minigame?: string) {
+    if (minigame === undefined) return this.rooms.authenticate(roomId, token);
+    return { id: this.minigameRooms.authenticate(minigame, roomId, token), userId: null };
+  }
+
   async handleConnection(socket: Socket) {
-    const { roomId, participantId } = socket.data as MediaSocketData;
+    const { mediaRoomId: roomId, participantId } = socket.data as MediaSocketData;
     const peers = this.peers.get(roomId) ?? new Map<string, PlayerMediaPeer>();
     const previous = peers.get(participantId);
     // One broadcast per participant; a second tab takes over without leaving ghost streams.
@@ -84,16 +97,16 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
     void this.revoke(socket).catch(() =>
       this.logger.warn("Не удалось отключить участника LiveKit"),
     );
-    const peers = this.peers.get(data.roomId);
+    const peers = this.peers.get(data.mediaRoomId);
     if (peers?.get(data.participantId)?.connectionId !== socket.id) return;
     peers.delete(data.participantId);
-    if (!peers.size) this.peers.delete(data.roomId);
-    this.broadcast(data.roomId);
+    if (!peers.size) this.peers.delete(data.mediaRoomId);
+    this.broadcast(data.mediaRoomId);
   }
 
   @SubscribeMessage("media:state")
   async update(@ConnectedSocket() socket: Socket, @MessageBody() value: unknown) {
-    const { roomId, participantId } = socket.data as MediaSocketData;
+    const { mediaRoomId: roomId, participantId } = socket.data as MediaSocketData;
     const state = parsePlayerMediaState(value);
     const peer = this.peers.get(roomId)?.get(participantId);
     if (!state || peer?.connectionId !== socket.id)
@@ -109,13 +122,18 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
 
   @SubscribeMessage("media:token")
   async connection(@ConnectedSocket() socket: Socket) {
-    const { roomId, participantId } = socket.data as MediaSocketData;
+    const { roomId, mediaRoomId, minigame, participantId } = socket.data as MediaSocketData;
     try {
-      await this.rooms.authenticate(roomId, socket.handshake.auth.token as string);
+      await this.authenticate(roomId, socket.handshake.auth.token as string, minigame);
       const allowed = await this.canBroadcast(socket);
-      if (this.peers.get(roomId)?.get(participantId)?.connectionId !== socket.id)
+      if (this.peers.get(mediaRoomId)?.get(participantId)?.connectionId !== socket.id)
         return { ok: false, error: "Подключение заменено другой вкладкой" };
-      const connection = await this.livekit.connection(roomId, participantId, socket.id, allowed);
+      const connection = await this.livekit.connection(
+        mediaRoomId,
+        participantId,
+        socket.id,
+        allowed,
+      );
       return { ok: true, ...connection };
     } catch {
       return { ok: false, error: "Видеосервер недоступен. Попробуй подключиться позже." };
@@ -144,7 +162,7 @@ export class PlayerMediaGateway implements OnGatewayInit, OnGatewayConnection, O
   private revoke(socket: Socket) {
     const data = socket.data as MediaSocketData;
     return (data.revocation ??= this.livekit.disconnect(
-      data.roomId,
+      data.mediaRoomId,
       playerMediaIdentity(data.participantId, socket.id),
     ));
   }

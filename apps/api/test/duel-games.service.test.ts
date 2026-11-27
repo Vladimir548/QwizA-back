@@ -12,6 +12,7 @@ import { HockeyService } from "../src/minigames/hockey.service";
 import { TwentyOneService } from "../src/minigames/twenty-one.service";
 import { NumberHuntService } from "../src/minigames/number-hunt.service";
 import { DoubleBluffService } from "../src/minigames/double-bluff.service";
+import { OddEvenService } from "../src/minigames/odd-even.service";
 import { ShellGameService } from "../src/minigames/shell-game.service";
 import { FirefightService } from "../src/minigames/firefight.service";
 
@@ -26,7 +27,8 @@ test("every catalog duel creates one sealed two-player match, restores each priv
     numbers = new NumberHuntService(),
     bluff = new DoubleBluffService(),
     firefight = new FirefightService(),
-    shells = new ShellGameService();
+    shells = new ShellGameService(),
+    oddEven = new OddEvenService();
   const bridge = new TopicMinigamesService(
     moment,
     zone,
@@ -41,6 +43,9 @@ test("every catalog duel creates one sealed two-player match, restores each priv
     bluff,
     firefight,
     shells,
+    undefined,
+    undefined,
+    oddEven,
   );
   const services = {
     memory,
@@ -50,6 +55,7 @@ test("every catalog duel creates one sealed two-player match, restores each priv
     "double-bluff": bluff,
     firefight,
     "shell-game": shells,
+    "odd-even": oddEven,
   };
   const players = [
     { id: "a", name: "Аня" },
@@ -74,6 +80,11 @@ test("every catalog duel creates one sealed two-player match, restores each priv
       const spectator = bridge.duelView("quiz", event, players, "c");
       assert.equal(spectator.session, null);
       assert.equal(spectator.snapshot.players.length, 2);
+      if (kind === "odd-even") {
+        assert.equal(oddEven.snapshot(a.session!.roomId).mode, "duel");
+        assert.equal(oddEven.snapshot(a.session!.roomId).chips, null);
+        assert.equal(oddEven.snapshot(a.session!.roomId, a.session!.playerId).chips, 5);
+      }
       assert.equal(JSON.stringify(spectator.snapshot).includes('"token"'), false);
       assert.throws(() => services[kind].join(a.session!.roomId, "Лишний"));
     }

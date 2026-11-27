@@ -9,6 +9,9 @@ import { emptyPlayerMedia } from "@qwiza/minigames";
 import { PlayerMediaGateway } from "../src/rooms/player-media.gateway";
 import type { RoomsService } from "../src/rooms/rooms.service";
 import type { SessionService } from "../src/auth/session.service";
+import { MinigameRoomAccess } from "../src/minigames/minigame-room-access";
+import { HockeyService } from "../src/minigames/hockey.service";
+import type { ModuleRef } from "@nestjs/core";
 import { TokenVerifier } from "livekit-server-sdk";
 import { testLivekit, livekitTestKey, livekitTestSecret } from "./helpers/livekit";
 
@@ -20,6 +23,13 @@ test("media role gates LiveKit publishing, keeps guest receiving and external li
   const tokens = { m: "m".repeat(44), a: "a".repeat(44), u: "u".repeat(44) };
   const livekit = testLivekit();
   const verifier = new TokenVerifier(livekitTestKey, livekitTestSecret);
+  const hockey = new HockeyService();
+  const minigameRooms = new MinigameRoomAccess({
+    get: (service: unknown) => {
+      assert.equal(service, HockeyService);
+      return hockey;
+    },
+  } as ModuleRef);
   const gateway = new PlayerMediaGateway(
     {
       authenticate: async (_room: string, token: string) => ({
@@ -34,6 +44,7 @@ test("media role gates LiveKit publishing, keeps guest receiving and external li
       },
     } as unknown as SessionService,
     livekit.service,
+    minigameRooms,
   );
   Object.defineProperty(gateway, "server", { value: namespace });
   gateway.afterInit(namespace);
@@ -48,9 +59,9 @@ test("media role gates LiveKit publishing, keeps guest receiving and external li
   const address = http.address();
   assert.ok(address && typeof address !== "string");
   const clients: Socket[] = [];
-  const connect = async (id: string, cookie?: string) => {
+  const connect = async (id: string, cookie?: string, roomId = "room", minigame?: string) => {
     const socket = io(`http://127.0.0.1:${address.port}/player-media`, {
-      auth: { roomId: "room", token: id },
+      auth: { roomId, token: id, minigame },
       transports: ["websocket"],
       reconnection: false,
       extraHeaders: cookie ? { cookie: `qwesto_session=${cookie}` } : {},
@@ -69,6 +80,25 @@ test("media role gates LiveKit publishing, keeps guest receiving and external li
     assert.equal(admin.access, true);
     assert.equal(regular.access, false);
     assert.equal(guest.access, false);
+    const first = hockey.create("Первый", undefined);
+    const second = hockey.join(first.roomId, "Второй");
+    const broadcaster = await connect(first.token, tokens.m, first.roomId, "hockey");
+    const viewer = await connect(second.token, tokens.u, second.roomId, "hockey");
+    assert.equal(broadcaster.access, true);
+    assert.equal(viewer.access, false);
+    const grant = await verifier.verify(
+      (await broadcaster.socket.emitWithAck("media:token")).token,
+    );
+    assert.equal(grant.video?.room, `qwiza-minigame-hockey-${first.roomId}`);
+    assert.equal(grant.sub, `${first.playerId}~${broadcaster.socket.id}`);
+    assert.equal(grant.video?.canPublish, true);
+    const invalid = io(`http://127.0.0.1:${address.port}/player-media`, {
+      auth: { roomId: first.roomId, token: "m", minigame: "hockey" },
+      reconnection: false,
+      extraHeaders: { cookie: `qwesto_session=${tokens.m}` },
+    });
+    clients.push(invalid);
+    assert.match(((await once(invalid, "connect_error"))[0] as Error).message, /Неверный ключ/);
     for (const source of [regular, guest]) {
       assert.equal(
         (await source.socket.emitWithAck("media:state", { ...emptyPlayerMedia, camera: true })).ok,
@@ -112,11 +142,12 @@ test("media role gates LiveKit publishing, keeps guest receiving and external li
       false,
     );
     const changed = once(media.socket, "media:role-changed"),
-      disconnected = once(media.socket, "disconnect");
+      disconnected = once(media.socket, "disconnect"),
+      minigameDisconnected = once(broadcaster.socket, "disconnect");
     await gateway.accountRoleChanged("m");
-    await changed;
-    await disconnected;
+    await Promise.all([changed, disconnected, minigameDisconnected]);
     assert.equal(media.socket.connected, false);
+    assert.equal(broadcaster.socket.connected, false);
     assert.ok(livekit.disconnected.some((identity) => identity.startsWith("room/m~")));
     const stolen = await connect("m", tokens.a);
     assert.equal(stolen.access, false);
@@ -130,6 +161,7 @@ test("media role gates LiveKit publishing, keeps guest receiving and external li
     );
   } finally {
     clients.forEach((socket) => socket.disconnect());
+    hockey.onModuleDestroy();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

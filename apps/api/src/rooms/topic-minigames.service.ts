@@ -1,3 +1,4 @@
+import { OddEvenService } from "../minigames/odd-even.service";
 import { ShellGameService } from "../minigames/shell-game.service";
 import { HotPotatoService } from "../minigames/hot-potato.service";
 import { IceRaceService } from "../minigames/ice-race.service";
@@ -51,8 +52,13 @@ export class TopicMinigamesService {
     @Optional() private readonly shells?: ShellGameService,
     @Optional() private readonly iceRaces?: IceRaceService,
     @Optional() private readonly hotPotatoes?: HotPotatoService,
+    @Optional() private readonly oddEven?: OddEvenService,
   ) {}
   private service(kind: GroupMinigameKind) {
+    if (kind === "odd-even") {
+      if (!this.oddEven) throw new Error("Сервис «Чёт или нечёт» недоступен");
+      return this.oddEven;
+    }
     if (kind === "hot-potato") {
       if (!this.hotPotatoes) throw new Error("Сервис горячей картошки недоступен");
       return this.hotPotatoes;
@@ -111,6 +117,8 @@ export class TopicMinigamesService {
 
   private createGroup(kind: GroupMinigameKind, name: string): MinigameSession {
     switch (kind) {
+      case "odd-even":
+        return this.oddEven!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
       case "hot-potato":
         return this.hotPotatoes!.create(name, undefined, QUIZ_MINIGAME_ROUNDS);
       case "ice-race":
@@ -187,6 +195,7 @@ export class TopicMinigamesService {
     return { session, snapshot, winnerId };
   }
   private duelService(kind: DuelMinigameKind) {
+    if (kind === "odd-even") return this.oddEven;
     if (kind === "shell-game") return this.shells!;
     if (kind === "firefight") return this.firefight!;
     if (kind === "double-bluff") return this.bluff!;
@@ -199,6 +208,8 @@ export class TopicMinigamesService {
           : this.numberHunt!;
   }
   private createDuel(kind: DuelMinigameKind, name: string) {
+    if (kind === "odd-even")
+      return this.oddEven!.create(name, { mode: "duel" }, QUIZ_MINIGAME_ROUNDS);
     if (kind === "shell-game")
       return this.shells!.create(name, { mode: "duel" }, QUIZ_MINIGAME_ROUNDS);
     if (kind === "firefight")

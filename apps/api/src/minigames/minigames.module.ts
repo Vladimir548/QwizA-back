@@ -1,4 +1,9 @@
 import { Module } from "@nestjs/common";
+import { MinigameRoomAccess } from "./minigame-room-access";
+import { MinigameLeaveController } from "./minigame-leave.controller";
+import { OddEvenController } from "./odd-even.controller";
+import { OddEvenGateway } from "./odd-even.gateway";
+import { OddEvenService } from "./odd-even.service";
 import { HotPotatoService } from "./hot-potato.service";
 import { IceRaceService } from "./ice-race.service";
 import { HotPotatoController } from "./hot-potato.controller";
@@ -47,6 +52,8 @@ import { FallingFloorGateway } from "./falling-floor.gateway";
 
 @Module({
   exports: [
+    MinigameRoomAccess,
+    OddEvenService,
     HotPotatoService,
     IceRaceService,
     ShellGameService,
@@ -64,6 +71,9 @@ import { FallingFloorGateway } from "./falling-floor.gateway";
     NumberHuntService,
   ],
   providers: [
+    MinigameRoomAccess,
+    OddEvenService,
+    OddEvenGateway,
     HotPotatoService,
     IceRaceService,
     HotPotatoGateway,
@@ -96,6 +106,8 @@ import { FallingFloorGateway } from "./falling-floor.gateway";
     FallingFloorGateway,
   ],
   controllers: [
+    MinigameLeaveController,
+    OddEvenController,
     HotPotatoController,
     IceRaceController,
     ShellGameController,

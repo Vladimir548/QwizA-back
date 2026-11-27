@@ -13,6 +13,43 @@ import { awardTopicPrizes, type ShellCommand, type TopicMinigameEvent } from "@q
 class TestShells extends ShellGameService {
   protected randomIndex = () => 0;
 }
+
+test("an explicit departure frees the seat and resets an interrupted round", () => {
+  const service = new TestShells();
+  try {
+    const host = service.create("Ведущий", { mode: "duel" }, 2);
+    const { roomId } = host;
+    const guest = service.join(roomId, "Гость");
+    service.connect(roomId, host.playerId, "host", true);
+    service.connect(roomId, guest.playerId, "guest", true);
+    service.connect(roomId, guest.playerId, "guest", false);
+    assert.equal(service.authenticate(roomId, guest.token), guest.playerId);
+    assert.equal(service.snapshot(roomId).players.length, 2);
+    service.connect(roomId, guest.playerId, "guest-returned", true);
+    const { roundId } = service.snapshot(roomId);
+    for (const player of [host, guest]) {
+      service.command(roomId, player.playerId, { id: randomUUID(), roundId, type: "ready" });
+    }
+    assert.notEqual(service.snapshot(roomId).phase, "lobby");
+
+    service.leave(roomId, guest.playerId);
+
+    const snapshot = service.snapshot(roomId);
+    assert.equal(snapshot.phase, "lobby");
+    assert.notEqual(snapshot.roundId, roundId);
+    assert.equal(snapshot.mode, "duel");
+    assert.equal(snapshot.series?.roundCount, 2);
+    assert.deepEqual(
+      snapshot.players.map((player) => [player.id, player.connected]),
+      [[host.playerId, true]],
+    );
+    assert.throws(() => service.authenticate(roomId, guest.token));
+    assert.equal(service.authenticate(roomId, host.token), host.playerId);
+    assert.ok(service.join(roomId, "Новый игрок").playerId);
+  } finally {
+    service.onModuleDestroy();
+  }
+});
 test("shell transport rejects forged outcomes and only accepts three valid slots", () => {
   const envelope = { id: randomUUID(), roundId: randomUUID(), type: "choose", slot: 1 };
   assert.deepEqual(parseShellCommand(envelope), envelope);

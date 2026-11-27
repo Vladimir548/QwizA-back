@@ -10,6 +10,7 @@ interface SocketData {
 }
 interface SocketService<Command, Snapshot> {
   authenticate(id: string, token: unknown): string;
+  hasPlayer(id: string, playerId: string): boolean;
   connect(id: string, playerId: string, socketId: string, connected: boolean): void;
   snapshot(id: string, playerId?: string): Snapshot;
   command(id: string, playerId: string, command: Command): Snapshot;
@@ -53,20 +54,34 @@ export abstract class MinigameGateway<Command, Snapshot>
         } satisfies SocketData;
         next();
       } catch (error) {
-        next(new Error((error as Error).message));
+        next(
+          Object.assign(new Error((error as Error).message), {
+            data: { code: "MINIGAME_SEAT_UNAVAILABLE" },
+          }),
+        );
       }
     });
     this.unsubscribe = this.service.subscribe((id) => {
       for (const socketId of server.adapter.rooms.get(id) ?? []) {
         const client = server.sockets.get(socketId);
-        if (client)
-          client.emit(`${this.prefix}:state`, this.service.snapshot(id, client.data.playerId));
+        if (!client) continue;
+        if (!this.service.hasPlayer(id, client.data.playerId)) {
+          client.emit("minigame:left");
+          client.disconnect();
+          continue;
+        }
+        client.emit(`${this.prefix}:state`, this.service.snapshot(id, client.data.playerId));
       }
     });
   }
   async handleConnection(socket: Socket) {
     const { roomId, playerId } = socket.data as SocketData;
     await socket.join(roomId);
+    if (!this.service.hasPlayer(roomId, playerId)) {
+      socket.emit("minigame:left");
+      socket.disconnect();
+      return;
+    }
     this.service.connect(roomId, playerId, socket.id, true);
   }
   handleDisconnect(socket: Socket) {

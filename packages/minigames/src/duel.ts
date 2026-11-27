@@ -89,4 +89,5 @@ export type DuelSnapshot =
   | import("./number-hunt").NumberHuntSnapshot
   | import("./double-bluff").BluffSnapshot
   | import("./firefight").FirefightSnapshot
-  | import("./shell-game").ShellSnapshot;
+  | import("./shell-game").ShellSnapshot
+  | import("./odd-even").OddEvenSnapshot;

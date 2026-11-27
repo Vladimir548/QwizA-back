@@ -20,14 +20,16 @@ interface RoomSeries {
   startingScores: Map<string, number>;
 }
 
-interface GameRoom<Match> {
+interface GameRoom<Match, Settings> {
   id: string;
   code: string;
   revision: number;
   touchedAt: number;
   match: Match;
+  settings: Settings;
   credentials: Map<string, string>;
   connections: Map<string, Set<string>>;
+  seatTimers: Map<string, ReturnType<typeof setTimeout>>;
   commands: Map<string, Set<string>>;
   series?: RoomSeries;
   sealed?: boolean;
@@ -36,6 +38,7 @@ interface GameRoom<Match> {
 
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 const ROOM_TTL_MS = 2 * 60 * 60 * 1000;
+const RECONNECT_GRACE_MS = 30_000;
 
 export abstract class MinigameRooms<
   Match extends { roundId: string; players: MinigamePlayer[] },
@@ -69,7 +72,7 @@ export abstract class MinigameRooms<
     update(room.match, this.now());
   }
 
-  private readonly rooms = new Map<string, GameRoom<Match>>();
+  private readonly rooms = new Map<string, GameRoom<Match, Settings>>();
   private readonly listeners = new Set<(id: string) => void>();
   private readonly cleanup = setInterval(() => this.prune(), 60000).unref();
 
@@ -81,6 +84,7 @@ export abstract class MinigameRooms<
     for (const [id, room] of this.rooms) {
       if (this.now() - room.touchedAt < ROOM_TTL_MS) continue;
       clearTimeout(room.timer);
+      for (const timer of room.seatTimers.values()) clearTimeout(timer);
       this.rooms.delete(id);
     }
   }
@@ -94,7 +98,7 @@ export abstract class MinigameRooms<
     return room;
   }
 
-  private reserve(room: GameRoom<Match>, displayName: string): MinigameSession {
+  private reserve(room: GameRoom<Match, Settings>, displayName: string): MinigameSession {
     if (room.sealed) throw new BadRequestException("Участники испытания уже определены.");
     const name = displayName.trim();
     if (!name || name.length > MAX_MINIGAME_NAME_LENGTH)
@@ -107,6 +111,7 @@ export abstract class MinigameRooms<
       throw new BadRequestException((error as Error).message);
     }
     room.credentials.set(tokenHash(token), playerId);
+    this.reserveDisconnectedSeat(room, playerId);
     this.publish(room);
     return { roomId: room.id, playerId, token };
   }
@@ -124,14 +129,16 @@ export abstract class MinigameRooms<
     } catch (error) {
       throw new BadRequestException((error as Error).message);
     }
-    const room: GameRoom<Match> = {
+    const room: GameRoom<Match, Settings> = {
       id,
       code: id.slice(0, 6).toUpperCase(),
       revision: 0,
       touchedAt: this.now(),
       match,
+      settings,
       credentials: new Map(),
       connections: new Map(),
+      seatTimers: new Map(),
       commands: new Map(),
       series:
         roundCount === undefined ? undefined : { round: 1, roundCount, startingScores: new Map() },
@@ -150,7 +157,10 @@ export abstract class MinigameRooms<
   }
 
   seal(id: string) {
-    this.room(id).sealed = true;
+    const room = this.room(id);
+    room.sealed = true;
+    for (const timer of room.seatTimers.values()) clearTimeout(timer);
+    room.seatTimers.clear();
   }
 
   authenticate(id: string, token: unknown) {
@@ -161,16 +171,67 @@ export abstract class MinigameRooms<
     return playerId;
   }
 
+  hasPlayer(id: string, playerId: string) {
+    return this.rooms.get(id)?.match.players.some((player) => player.id === playerId) ?? false;
+  }
+
+  private reserveDisconnectedSeat(room: GameRoom<Match, Settings>, playerId: string) {
+    if (room.sealed || room.seatTimers.has(playerId)) return;
+    room.seatTimers.set(
+      playerId,
+      setTimeout(() => {
+        room.seatTimers.delete(playerId);
+        if (!room.connections.get(playerId)?.size && this.hasPlayer(room.id, playerId))
+          this.leave(room.id, playerId);
+      }, RECONNECT_GRACE_MS).unref(),
+    );
+  }
+
+  leave(id: string, playerId: string) {
+    const room = this.room(id);
+    if (room.sealed) throw new BadRequestException("Этот стол управляется из викторины.");
+    if (!this.hasPlayer(id, playerId)) return;
+
+    // Rebuild the interrupted round so games with fixed seats, turns or inputs can start again.
+    const match = this.newMatch(room.settings, randomUUID());
+    for (const player of room.match.players) {
+      if (player.id === playerId) continue;
+      this.addPlayer(match, player.id, player.name);
+      const seat = match.players[match.players.length - 1];
+      seat.score = player.score;
+      seat.connected = player.connected;
+    }
+    for (const [token, owner] of room.credentials) {
+      if (owner === playerId) room.credentials.delete(token);
+    }
+    clearTimeout(room.seatTimers.get(playerId));
+    room.seatTimers.delete(playerId);
+    room.connections.delete(playerId);
+    room.commands.delete(playerId);
+    room.series?.startingScores.delete(playerId);
+    room.match = match;
+    for (const player of match.players) {
+      if (!player.connected) this.reserveDisconnectedSeat(room, player.id);
+    }
+    this.publish(room);
+    if (!match.players.length) this.rooms.delete(id);
+  }
+
   connect(id: string, playerId: string, socketId: string, connected: boolean) {
     const room = this.room(id);
+    const player = room.match.players.find((candidate) => candidate.id === playerId);
+    if (!player) return;
     const connections = room.connections.get(playerId) ?? new Set<string>();
     if (connected) connections.add(socketId);
     else connections.delete(socketId);
     room.connections.set(playerId, connections);
-    const player = room.match.players.find((candidate) => candidate.id === playerId)!;
     player.connected = connections.size > 0;
     if (!player.connected) for (const participant of room.match.players) participant.ready = false;
     this.presenceChanged(room.match, this.now());
+    if (player.connected) {
+      clearTimeout(room.seatTimers.get(playerId));
+      room.seatTimers.delete(playerId);
+    } else this.reserveDisconnectedSeat(room, playerId);
     this.publish(room);
   }
 
@@ -201,6 +262,7 @@ export abstract class MinigameRooms<
 
   command(id: string, playerId: string, command: Command) {
     const room = this.room(id);
+    if (!this.hasPlayer(id, playerId)) throw new UnauthorizedException("Игрок покинул стол.");
     const handled = room.commands.get(playerId) ?? new Set<string>();
     if (handled.has(command.id)) return this.snapshot(id, playerId);
     const series = room.series;
@@ -234,7 +296,7 @@ export abstract class MinigameRooms<
     return () => this.listeners.delete(listener);
   }
 
-  private publish(room: GameRoom<Match>) {
+  private publish(room: GameRoom<Match, Settings>) {
     room.revision += 1;
     room.touchedAt = this.now();
     clearTimeout(room.timer);
@@ -252,7 +314,10 @@ export abstract class MinigameRooms<
 
   onModuleDestroy() {
     clearInterval(this.cleanup);
-    for (const room of this.rooms.values()) clearTimeout(room.timer);
+    for (const room of this.rooms.values()) {
+      clearTimeout(room.timer);
+      for (const timer of room.seatTimers.values()) clearTimeout(timer);
+    }
     this.listeners.clear();
     this.rooms.clear();
   }

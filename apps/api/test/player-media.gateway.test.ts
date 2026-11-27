@@ -11,6 +11,7 @@ import { TokenVerifier } from "livekit-server-sdk";
 import { testLivekit, livekitTestKey, livekitTestSecret } from "./helpers/livekit";
 import type { RoomsService } from "../src/rooms/rooms.service";
 import type { SessionService } from "../src/auth/session.service";
+import type { MinigameRoomAccess } from "../src/minigames/minigame-room-access";
 
 test("authenticated media stays within its room, ignores forged owners and cleans up on disconnect", async () => {
   const http = createServer();
@@ -26,6 +27,7 @@ test("authenticated media stays within its room, ignores forged owners and clean
     } as RoomsService,
     { user: async () => null } as unknown as SessionService,
     livekit.service,
+    { authenticate: () => assert.fail("Expected quiz room authentication") } as MinigameRoomAccess,
   );
   Object.defineProperty(gateway, "server", { value: namespace });
   gateway.afterInit(namespace);
