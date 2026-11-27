@@ -1,0 +1,50 @@
+services:
+  migrate:
+    build:
+      context: .
+      target: build
+    command: ["npm", "run", "db:deploy", "-w", "@qwiza/api"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in Dokploy}
+    restart: "no"
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  backend:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in Dokploy}
+      HOST: "0.0.0.0"
+      PORT: "4000"
+      WEB_ORIGIN: https://linkcam.online
+      LIVEKIT_URL: wss://livekit.linkcam.online
+      LIVEKIT_API_URL: http://qwiza-livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?Set LIVEKIT_API_KEY in Dokploy}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?Set LIVEKIT_API_SECRET in Dokploy}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - qwiza-media:/app/apps/api/.local-data
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  dokploy-network:
+    external: true
+
+volumes:
+  qwiza-media:
+    external: true
